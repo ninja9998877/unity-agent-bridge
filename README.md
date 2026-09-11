@@ -42,6 +42,45 @@ Instead of shipping a pile of pre-built APIs, the agent — when it hits a speci
 **reads the code and adds the one action that jumps straight to that exact state.**
 One new method is one new capability, available as soon as Unity compiles.
 
+## Zero intrusion: safe to drop into a production project
+
+This is deliberate — you shouldn't have to modify production code just to debug it:
+
+| | |
+|---|---|
+| **Business code** | **Not one line changed.** Private members and methods are reached via reflection |
+| **Scenes / prefabs / config tables** | Untouched, and **no GameObject has to be added to a scene** (it stays resident via `[InitializeOnLoad]`) |
+| **Project settings** | Untouched. Not a byte is written to `ProjectSettings/` |
+| **Shipped builds** | Lives under `Assets/Editor/` → editor-only compilation, **excluded from builds automatically** |
+| **Version control** | Command/result files live in `Temp/`, never committed |
+
+The only "intrusion" is **two new `.cs` files**. Delete them and the project is exactly as it was.
+
+---
+
+## Three things it doesn't need
+
+Compared with the two usual alternatives:
+
+| | OS-level automation (screenshot + clicks) | Unity's test framework | **This tool** |
+|---|---|---|---|
+| OS-level interaction | ✅ required (mouse injection, coordinate calibration) | ❌ | ❌ **not needed** |
+| Unity API / package setup | — | ✅ package + asmdef config | ❌ **not needed** |
+| Version ceiling | — | tied to the package version | **none** (measured on 2020.3) |
+| Can verify UI feel / rendering | ✅ | ❌ | ❌ (that's OS-level's turf) |
+
+- **No OS-level automation.** Nothing clicks coordinates or injects mouse events, so nothing depends
+  on screen resolution, window position or DPI calibration — and you never get "I clicked but it
+  landed somewhere else".
+- **No Unity-provided API.** No package to install, no asmdef to configure, no test framework. It uses
+  only `EditorApplication.update`, reflection and `System.IO` — surface that hasn't moved in a decade.
+- **No version ceiling.** Nothing here is gated on a newer Unity.
+
+> This isn't meant to replace OS-level automation — on-device verification, UI feel and rendering are
+> still its turf. This tool is about **reproducing scenes inside the editor**; the two are complementary.
+
+---
+
 ## Why bother
 
 | Without it | With it |

@@ -71,21 +71,22 @@ namespace AgentBridge
         // 编辑器控制
         // ─────────────────────────────────────────────────────────────
 
+        /// <summary>
+        /// 进入播放模式，并开启「失焦自动抢焦点」。
+        ///
+        /// 刻意**不写** ProjectSettings：实测 PlayerSettings.runInBackground 对编辑器播放循环
+        /// 无效（设为 true 时 frameCount 依然冻结），却会弄脏受版本控制的 ProjectSettings.asset。
+        /// 真正解决问题的是 AutoFocus，见 docs/pitfalls.md。
+        /// </summary>
         [BridgeAction("play")]
         public static JObject Play()
         {
-            // ⚡ 编辑器失焦会让播放循环完全停摆，文件驱动的 agent 必然处于失焦状态，
-            //    所以这里强制打开后台运行 + 启用自动抢焦点（详见 docs/pitfalls.md）
-            bool oldRunInBg = PlayerSettings.runInBackground;
-            if (!oldRunInBg) PlayerSettings.runInBackground = true;
-
             AgentBridge.AutoFocus = true;
             EditorApplication.isPlaying = true;
             AgentBridge.FocusEditorWindow();
             return new JObject
             {
                 ["isPlaying"] = true,
-                ["runInBackgroundAutoEnabled"] = !oldRunInBg,
                 ["autoFocus"] = AgentBridge.AutoFocus,
             };
         }
@@ -134,23 +135,6 @@ namespace AgentBridge
                 ["isFocused"] = Application.isFocused,
                 ["editorPaused"] = EditorApplication.isPaused,
                 ["editorCompiling"] = EditorApplication.isCompiling,
-            };
-        }
-
-        /// <summary>
-        /// 读写 PlayerSettings 的「后台运行」开关。
-        /// ⚠️ 写它会改动 ProjectSettings/ProjectSettings.asset（通常受版本控制），调试完建议传 false 还原。
-        /// </summary>
-        [BridgeAction("set_run_in_background")]
-        public static JObject SetRunInBackground(bool enabled)
-        {
-            bool before = PlayerSettings.runInBackground;
-            PlayerSettings.runInBackground = enabled;
-            return new JObject
-            {
-                ["before"] = before,
-                ["now"] = PlayerSettings.runInBackground,
-                ["file"] = "ProjectSettings/ProjectSettings.asset",
             };
         }
 
