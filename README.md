@@ -1,73 +1,78 @@
 # unity-agent-bridge
 
-**让 AI agent 自己把 Unity 游戏开到出问题的那一幕，读完状态再回来改代码。**
+**Let your AI agent drive Unity to the exact moment a bug happens — then read real runtime state and get to work.**
 
-`Unity 2019+` · `AI Agent` · `场景级复现` · `MIT`
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+`Unity 2019+` · `AI Agent` · `Scene-level repro` · `MIT`
 
 ---
 
-> **🤖 你是 AI agent？** 直接跳到 [**给 AI agent**](#给-ai-agent) —— 那是你的工作规则，读完再动手。
+> **🤖 AI agent?** Jump straight to [**For AI agents**](#for-ai-agents) — that's your working spec. Read it before doing anything.
 >
-> **👤 你是人？** 往下读。
+> **👤 Human?** Keep reading.
 
 ---
 
-# 给人类
+# For humans
 
-## 30 秒理解
+## The 30-second version
 
-复现一个场景级 bug，最难的一步不是修，是**到达现场**：登录、选服、点进某个界面、等一场战斗打到第 N 回合。
-这步通常只能靠人手点，AI 只能在旁边等。
+When you reproduce a scene-level bug, the hard part isn't the fix — it's **getting there**:
+log in, pick a server, navigate into a screen, wait for a battle to reach round N.
+That step is usually manual, and the AI just sits there waiting.
 
-这个项目把那一步自动化了：
+This project automates that step.
 
 ```
-  AI / 脚本                        Unity 编辑器
-      │                                 │
-      │  写 Temp/xxx_cmd.json           │
-      ├────────────────────────────────►│  AgentBridge 轮询(0.5s)
-      │                                 │  反射分发到 [BridgeAction] 方法
-      │  读 Temp/xxx_result.json        │
-      │◄────────────────────────────────┤  同步执行，回写结果
-      ▼                                 ▼
-   拿到 state → 断言 → 下一步       游戏已在目标现场
+  AI / script                       Unity Editor
+      │                                  │
+      │  write Temp/xxx_cmd.json         │
+      ├─────────────────────────────────►│  AgentBridge polls (0.5s)
+      │                                  │  dispatches by reflection to [BridgeAction]
+      │  read Temp/xxx_result.json       │
+      │◄─────────────────────────────────┤  runs synchronously, writes result back
+      ▼                                  ▼
+   read state → assert → next step    the game is now in the target state
 ```
 
-**核心设计：框架固定，场景库随问题生长。**
+**Core idea: the framework is fixed, the scenario library grows as you hit problems.**
 
-不预置一堆 API，而是让 AI 遇到具体问题时，**按那个问题的代码逻辑现场加一个最直达的 action**。
-加一个方法就是一个新能力，编译后立刻可用。
+Instead of shipping a pile of pre-built APIs, the agent — when it hits a specific problem —
+**reads the code and adds the one action that jumps straight to that exact state.**
+One new method is one new capability, available as soon as Unity compiles.
 
-## 为什么值得用
+## Why bother
 
-| 没有它 | 有它 |
+| Without it | With it |
 |---|---|
-| 人点 10 分钟到现场，AI 才能开始查 | AI 自己 1 分钟到现场 |
-| 每次复现都要重走一遍热身流程 | 跑通的链路存成 recipe，下次直接回放 |
-| AI 只能对着代码猜 | AI 能读到真实运行时状态 |
-| 改完代码，验证还得靠人 | AI 自己改 → 自己复现 → 自己验证 |
+| A human clicks for 10 minutes before the AI can start | The AI gets there itself in about a minute |
+| Every repro re-walks the same warm-up steps | Proven chains are saved as recipes and replayed |
+| The AI can only guess from source code | The AI reads real runtime state |
+| After a fix, a human still has to verify | The AI reproduces, verifies, and iterates on its own |
 
-## 快速开始
+## Quick start
 
-### 1. 把 Unity 侧脚本放进工程
+### 1. Drop the Unity scripts into your project
 
-复制 `unity/Assets/Editor/AgentBridge/` 到你工程的 `Assets/Editor/` 下。
+Copy `unity/Assets/Editor/AgentBridge/` into your project's `Assets/Editor/`.
 
-> 放 `Editor/` 下 → 只在编辑器编译，**不会进正式包**。
-> 依赖 `Newtonsoft.Json`（Unity 2018+ 一般已内置；没有就 Package Manager 装 `com.unity.nuget.newtonsoft-json`）。
+> Under `Editor/` → editor-only compilation, **never shipped in a build**.
+> Requires `Newtonsoft.Json` (bundled with Unity 2018+; otherwise install
+> `com.unity.nuget.newtonsoft-json` from the Package Manager).
 
-编辑器 Console 出现这行就是好了：
+You're good when the Console shows:
 
 ```
-[AgentBridge] 已就绪 (prefix=agentbridge)。监听: <工程>/Temp/agentbridge_cmd.json
+[AgentBridge] 已就绪 (prefix=agentbridge)。监听: <project>/Temp/agentbridge_cmd.json
 ```
 
-### 2. 用命令行驱动它
+### 2. Drive it from the command line
 
 ```bash
-export AGENTBRIDGE_PROJECT=/path/to/UnityProject   # 省得每次都写 --project
+export AGENTBRIDGE_PROJECT=/path/to/UnityProject   # so you can drop --project
 
-python tools/bridge.py actions                     # 看有哪些 action
+python tools/bridge.py actions                     # list available actions
 python tools/bridge.py send ping
 ```
 
@@ -79,22 +84,23 @@ python tools/bridge.py send ping
 }
 ```
 
-### 3. 交给你的 AI agent
+### 3. Hand it to your AI agent
 
-把 [`AGENTS.md`](AGENTS.md) 喂给你的 agent（Claude Code / Cursor / 自建 agent 都行）。
+Feed [`AGENTS.md`](AGENTS.md) to your agent (Claude Code, Cursor, a homegrown agent — anything works).
 
-## 日常长什么样
+## What it looks like day to day
 
-假设要给"某场战斗第 5 回合的 buff 显示错乱"写个复现：
+Say you need to reproduce "buffs render wrong on round 5 of battle X":
 
 ```bash
-# agent 读代码，发现入场入口是 LoginManager，于是在 BridgeActions.cs 里加：
+# The agent reads the code, finds the entry point is LoginManager, and adds to BridgeActions.cs:
 
 #   [BridgeAction("enter_battle")]
 #   public static JObject EnterBattle(int battleId, int round, int seed = 0) { ... }
 
-# 编译完后驱动：
-python tools/bridge.py session clear                       # 开始记录
+# Once compiled, it drives the game:
+
+python tools/bridge.py session clear                       # start recording
 python tools/bridge.py send play
 python tools/bridge.py send login --arg account=test01 --arg password=xxx
 python tools/bridge.py send select_server --arg serverId=1001
@@ -112,180 +118,193 @@ python tools/bridge.py send enter_battle --arg battleId=100001 --arg round=5 --a
 }
 ```
 
-拿到状态就能断言，配合 `bridge.py log` 读编辑器日志定位。
+With structured state in hand it can assert; `bridge.py log` tails the editor log for the rest.
 
-**跑通之后别浪费**：
+**Don't throw away a working chain:**
 
 ```bash
-python tools/bridge.py recipe save battle-100001-r5    # 固化这条链路
-python tools/bridge.py recipe run battle-100001-r5     # 以后一条命令回放
-python tools/bridge.py recipe run battle-100001-r5 --from 4   # 或只复用后半段
+python tools/bridge.py recipe save battle-100001-r5             # freeze it
+python tools/bridge.py recipe run battle-100001-r5              # replay the whole thing later
+python tools/bridge.py recipe run battle-100001-r5 --from 4     # or just reuse the tail
 ```
 
-## 这东西算什么？（skill / MCP / 库）
+## What is this, exactly? (skill / MCP / library)
 
-经常被问，这里一次说清 —— **它是分层的，不互斥**：
+Frequently asked, so here it is once — **these are layers, not mutually exclusive**:
 
-| 层 | 本项目对应 | 说明 |
+| Layer | In this project | What it answers |
 |---|---|---|
-| **能力（工具）** | `AgentBridge.cs` + `bridge.py` | 真正干活的：能被 shell 调用的命令行工具 |
-| **规程（skill）** | `AGENTS.md` + `docs/` | 告诉 agent **怎么做判断**：什么时候加 action、什么是反模式 |
-| **接入方式** | 当前 = shell CLI | 也可以再包一层 MCP server |
+| **Capability (tool)** | `AgentBridge.cs` + `bridge.py` | The thing that actually works, callable from a shell |
+| **Procedure (skill material)** | `AGENTS.md` + `docs/` | **How to judge**: when to add an action, what's an anti-pattern |
+| **Transport** | currently = shell CLI | A thin MCP server is also possible |
 
-- **它不是 MCP。** 现在走的是「文件协议 + 命令行」，agent 通过 shell 调用。
-  好处是**不挑宿主**——任何能跑命令的 agent 都能用，零集成成本。
-- **它也不是 skill。** skill 是"知识包"，本身不执行。本项目里 `AGENTS.md`/`docs` 是 skill 的素材，
-  但真正到现场的能力来自 `bridge.py`。
-- **它天然可以被包成 MCP。** 每个 `[BridgeAction]` 对应一个 MCP tool，
-  Unity 那边现成的 `list_actions` 就是 tool discovery。想加的话成本不高，
-  主要要处理「Unity 没开」和「agent 新加 action 后工具列表刷新」（`notifications/tools/list_changed`）两件事。
+- **It is not an MCP server.** It uses a file protocol plus a CLI; the agent shells out to it.
+  The upside: **host-agnostic** — any agent that can run commands can use it, with zero integration work.
+- **It is not a skill either.** A skill is a knowledge bundle and doesn't execute anything on its own.
+  Here, `AGENTS.md`/`docs` are skill material — but the ability to actually reach the scene comes from `bridge.py`.
+- **It could be wrapped as MCP.** Each `[BridgeAction]` maps to an MCP tool, and the existing
+  `list_actions` is tool discovery already. The cost isn't high — the two things to handle are
+  "Unity isn't running" and refreshing the tool list after the agent adds an action
+  (`notifications/tools/list_changed`).
 
-**建议**：先用 CLI。需要塞进禁用 shell 的沙箱、或者想让工具直接出现在 agent 的工具列表里，再包 MCP。
+**Recommendation**: start with the CLI. Wrap it in MCP only when you need to reach a sandbox
+where shell is disabled, or you want the actions to show up directly in the agent's tool list.
 
-## 适合 / 不适合
+## Good fit / bad fit
 
-**适合**：编辑器内的场景级复现、状态断言、批量回归、给 AI 提供"能到达现场"的能力。
+**Good fit**: scene-level repro inside the editor, state assertions, batch regression,
+giving an AI the ability to reach the scene at all.
 
-**不适合**：真机验证、UI 交互手感、渲染表现、需要真实点击/输入的体验测试。
-那些属于 OS 层自动化（截图 + 坐标点击）的范畴，两者互补而非替代。
+**Bad fit**: on-device verification, UI feel, rendering, anything needing real clicks or typing.
+That's the domain of OS-level automation (screenshot + coordinate clicking). The two are
+complementary, not competing.
 
-## ⚠️ 一个必须知道的坑
+## ⚠️ One gotcha you must know
 
-**Unity 编辑器一旦失去 OS 焦点，播放循环会「完全停摆」**——不是降速，是彻底不走帧。
+**Once the Unity Editor loses OS focus, the play loop stops completely** — not slows down, *stops*.
 
-实测：失焦 115 秒内 `Time.frameCount` 一直是 **2**；重新聚焦后 6 秒到 203。
+Measured: `Time.frameCount` stayed at **2** for 115 seconds while unfocused; after refocusing it
+reached 203 within 6 seconds.
 
-后果很隐蔽：所有靠 `MonoBehaviour.Update` 驱动的异步系统（资源加载、协程、网络回调）会一起卡死，
-**表象极像网络问题或资源加载失败**。文件驱动的 agent 天然处于失焦状态，必踩。
+The fallout is subtle: every async system driven by `MonoBehaviour.Update` (asset loading,
+coroutines, network callbacks) freezes along with it, so it **looks exactly like a network
+problem or a failed asset download**. A file-driven agent is unfocused by nature, so it will always hit this.
 
-两个反直觉点（都实测过）：
+Two counter-intuitive facts (both verified):
 
-- `PlayerSettings.runInBackground = true` **对编辑器播放循环无效**
-- `Application.isFocused` **不可靠**——失焦时它仍返回 `true`
+- `PlayerSettings.runInBackground = true` **has no effect** on the editor play loop
+- `Application.isFocused` **is unreliable** — it still returns `true` while unfocused
 
-`play` 动作已内置自动抢焦点作为对策。完整分析见 [`docs/pitfalls.md`](docs/pitfalls.md)。
+The `play` action auto-refocuses the window as a countermeasure.
+Full analysis in [`docs/pitfalls.md`](docs/pitfalls.md).
 
-## 目录结构
+## Layout
 
 ```
 unity-agent-bridge/
-├── README.md                       # 你正在看的（人类部分 + agent 部分）
-├── AGENTS.md                       # ⭐ 交给 AI agent 的完整规则
+├── README.md                       # this file (English)
+├── README.zh-CN.md                # 简体中文
+├── AGENTS.md                       # ⭐ the full spec you hand to an AI agent
 ├── docs/
-│   ├── architecture.md             文件协议、分发机制、与 batchmode 的关系
-│   ├── adding-actions.md           ⭐ 怎么动态加 action
-│   ├── recipes.md                  链路保存与复用
-│   ├── pitfalls.md                 踩过的坑（失焦停摆排第一）
-│   └── open-sourcing.md            加项目内容前的脱敏清单
+│   ├── architecture.md             file protocol, dispatch, relation to batchmode
+│   ├── adding-actions.md           ⭐ how to add actions on the fly
+│   ├── recipes.md                  saving and reusing chains
+│   ├── pitfalls.md                 the pits we fell into (play-loop stall is #1)
+│   └── open-sourcing.md            scrub checklist before open-sourcing
 ├── unity/Assets/Editor/AgentBridge/
-│   ├── AgentBridge.cs              骨架：轮询 / 分发 / 自动抢焦点
-│   └── BridgeActions.cs            ⭐ agent 实时编辑的文件（只放通用能力）
+│   ├── AgentBridge.cs              skeleton: polling / dispatch / auto-refocus
+│   └── BridgeActions.cs            ⭐ the file the agent edits live (generic actions only)
 └── tools/
-    ├── bridge.py                   命令行驱动
-    └── recipes/                    链路库
+    ├── bridge.py                   command-line driver
+    └── recipes/                    the chain library
 ```
 
-## 常见问题
+## FAQ
 
-**Q：一定要用 Python 吗？**
-不用。`bridge.py` 只是把文件协议包成了好用的命令。协议本身就是两个 JSON 文件，
-任何语言、甚至手工 `echo` 都能驱动。
+**Does it have to be Python?**
+No. `bridge.py` just wraps the file protocol into convenient commands. The protocol itself is
+two JSON files — any language works, even `echo`.
 
-**Q：能跟别的工具/agent 并存吗？**
-能。`--prefix`（或环境变量 `AGENTBRIDGE_PREFIX`）隔离各自的指令文件。
+**Can it coexist with other tools/agents?**
+Yes. Use `--prefix` (or `AGENTBRIDGE_PREFIX`) to isolate each one's command files.
 
-**Q：项目专有的 action 会进这个仓库吗？**
-不会。`BridgeActions.cs` 只放通用能力，项目专属请另建文件（同样打 `[BridgeAction]` 就会被发现），
-这样两边能各自独立升级。
+**Will my project-specific actions end up in this repo?**
+No. `BridgeActions.cs` holds generic capabilities only. Put project-specific ones in a separate
+file (same `[BridgeAction]` attribute, auto-discovered), so the two can evolve independently.
 
-**Q：和 EditMode 测试什么关系？**
-互补。编辑器**关着**时跑 EditMode 测试（快、适合纯逻辑）；编辑器**开着**时用本项目（能到场景现场）。
-两者互斥，不能同时开。
+**How does this relate to EditMode tests?**
+Complementary. With the editor **closed**, run EditMode tests (fast, pure logic). With the editor
+**open**, use this project (reaches actual scene state). They're mutually exclusive — only one
+Unity instance per project.
 
 ---
 
-# 给 AI agent
+# For AI agents
 
-> 完整规则见 [`AGENTS.md`](AGENTS.md)。这里是精简版，够你开工。
+> The full spec is in [`AGENTS.md`](AGENTS.md). This is the short version — enough to start.
 
-## 硬性规则
+## Hard rules
 
-1. **不要模拟人的点击。** 加 action 要「一步到位」直达现场，不是 `click(100,200)` 点过去。
-   点坐标属于 OS 层自动化的活。
-2. **加 action 前先读代码。** 搞清"这个现场正常玩是怎么走到的"，照那条真实路径写。
-   **猜出来的路径会把你带到错误状态，比到不了更糟。**
-3. **涉及随机的场景必须支持传随机种子。** 不然 bug 复现不出来。
-4. **返回关键状态。** 返回值是你的断言依据，比看截图可靠。
-5. **只加读，慎加写**，且**不要**加通用的「执行任意方法」反射接口 —— 不可审计、不可复用。
-6. **项目专有的 action 单独放文件**，别混进 `BridgeActions.cs`。
+1. **Don't simulate human clicks.** Add an action that jumps **straight** to the target state,
+   not `click(100,200)` sequences. Coordinate clicking is OS-level automation's job.
+2. **Read the code before adding an action.** Figure out *how the game normally gets there*,
+   then follow that real path. **A guessed path lands you in a wrong state — worse than not arriving.**
+3. **Anything random must accept a seed.** Otherwise the bug won't reproduce.
+4. **Return meaningful state.** Your return value is the assertion basis — far more reliable than a screenshot.
+5. **Prefer reads over writes**, and **never** add a generic "invoke any method" reflection endpoint —
+   it's unauditable and unreusable.
+6. **Keep project-specific actions in a separate file**, out of `BridgeActions.cs`.
 
-## 标准工作流
+## Standard workflow
 
 ```
-① 读代码      → 搞清「怎样才能到达那个现场」
-② 加 action   → 在 BridgeActions.cs 里写一个最直达的方法
-③ 编译        → Unity 自动编译，几秒
-④ 驱动        → bridge.py send <action> --arg k=v ...
-⑤ 读状态+日志 → bridge.py send ... / bridge.py log --tail 100
-⑥ 定位→改代码 → 回到 ③
-⑦ 跑通了      → bridge.py recipe save <名字>
+① Read the code  → figure out how to reach the target state
+② Add an action  → one straight-to-the-point method in BridgeActions.cs
+③ Compile        → Unity recompiles automatically, a few seconds
+④ Drive          → bridge.py send <action> --arg k=v ...
+⑤ Read state+log → bridge.py send ... / bridge.py log --tail 100
+⑥ Locate → fix   → back to ③
+⑦ Chain works    → bridge.py recipe save <name>
 ```
 
-## 加一个 action
+## Adding an action
 
 ```csharp
-/// <summary>直接到达「某场战斗的第 N 回合」</summary>
+/// <summary>Jump straight to "round N of battle X"</summary>
 [BridgeAction("enter_battle")]
 public static JObject EnterBattle(int battleId, int round, int seed = 0)
 {
-    // 1. 按项目里真实的入场路径把游戏送到目标现场
-    // 2. seed != 0 时固定随机，保证可复现
-    // 3. 返回关键状态供断言
+    // 1. Follow the project's real entry path to put the game in the target state
+    // 2. Fix the RNG when seed != 0, so it's reproducible
+    // 3. Return the state you'll assert on later
     return new JObject { ["ok"] = true, ["round"] = round, ["leftHp"] = ..., ["buffs"] = new JArray(...) };
 }
 ```
 
-- `public static`，返回 `JObject`；参数支持 `int`/`float`/`bool`/`string`，名字对应 `--arg k=v`
-- `[BridgeAction("名字")]` **自动被发现，不需要注册**
-- 命名：`动词_对象`（`enter_battle`、`set_hero_level`）
+- `public static`, returns `JObject`; params may be `int`/`float`/`bool`/`string`, matching `--arg k=v`
+- `[BridgeAction("name")]` is **auto-discovered — no registration**
+- Naming: `verb_object` (`enter_battle`, `set_hero_level`)
 
-> **找真实路径的技巧**：很多项目自带开发者/调试面板（快速登录、跳关、发道具），
-> 它们已经帮你找好了最短路径，**照抄它们的调用方式**最省事也最正确。
+> **Tip for finding the real path**: many projects ship a developer/debug panel (fast login,
+> level skip, grant item). Those already found the shortest path — **copy how they call it.**
 
-## 卡住了？先量循环活没活
-
-```bash
-python tools/bridge.py send frame      # 隔几秒再发一次，比对 frameCount
-```
-
-- `frameCount` 在涨 → 循环正常，是**逻辑问题**，去读日志
-- `frameCount` 不动 → **循环被挂起了**（编辑器失焦 / 暂停 / 正在编译）。
-  此时所有异步系统都不推进，**你看到的一切"异常"都是假象**
-
-> **别在没有 `frame` 证据的情况下断言"是网络问题 / 资源问题"。**
-
-## 复用跑通的链路
+## Stuck? Measure whether the loop is alive first
 
 ```bash
-python tools/bridge.py session clear                   # 开始前清一次
-# ... 正常驱动 ...
-python tools/bridge.py recipe save my-flow             # 跑通后固化
-python tools/bridge.py recipe run my-flow              # 整条回放
-python tools/bridge.py recipe run my-flow --from 3     # 只复用后半段
+python tools/bridge.py send frame      # send it twice a few seconds apart, compare frameCount
 ```
 
-保存后手工补两样（自动生成给不了）：**`wait`/`expect` 等待条件**、**seed 固定随机**。
-写法见 [`docs/recipes.md`](docs/recipes.md)。
+- `frameCount` increasing → the loop is fine; this is a **logic problem**, go read the log
+- `frameCount` frozen → **the loop is suspended** (editor unfocused / paused / compiling).
+  Nothing async advances, so **every "anomaly" you see is an illusion**
 
-> ⚠️ **recipe 是私有资产**，里面有账号、服务器 ID、业务流程 —— **不要提交到公开仓库**。
+> **Never claim "it's a network/resource problem" without `frame` evidence.**
 
-## 别做这些
+## Reusing a chain that worked
 
-- ❌ 为了让"一步到位"而绕过真实业务路径硬塞状态 —— 复现出来的不是真 bug
-- ❌ 加 `invoke(type, method, args)` 这种通用反射接口
-- ❌ 把项目专有逻辑写进 `BridgeActions.cs`
-- ❌ 没有 `frame` 证据就说"是网络/资源问题"
-- ❌ 把带凭据的 recipe 推到公开仓库
+```bash
+python tools/bridge.py session clear                   # clear before starting
+# ... drive normally ...
+python tools/bridge.py recipe save my-flow             # freeze it once it works
+python tools/bridge.py recipe run my-flow              # replay the whole thing
+python tools/bridge.py recipe run my-flow --from 3     # or reuse only the tail
+```
+
+After saving, hand-edit two things the generator can't produce:
+**`wait`/`expect` conditions**, and **a fixed seed** for anything random.
+Syntax in [`docs/recipes.md`](docs/recipes.md).
+
+> ⚠️ **Recipes are private assets.** They contain accounts, server IDs, and business flows —
+> **never commit them to a public repo.**
+
+## Don't do these
+
+- ❌ Bypass the real code path and force state in, just to "jump straight there" — the bug you
+  reproduce won't be the real bug
+- ❌ Add a generic `invoke(type, method, args)` reflection endpoint
+- ❌ Put project-specific logic into `BridgeActions.cs`
+- ❌ Claim "it's a network/resource problem" without `frame` evidence
+- ❌ Push recipes containing credentials to a public repo
 
 ---
 
