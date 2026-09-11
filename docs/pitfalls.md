@@ -76,22 +76,56 @@ python tools/bridge.py send frame      # send again a few seconds later, compare
 
 ---
 
-## 2. Unity does **not** recompile scripts while in Play mode
+## 2. Unity doesn't recompile when you think it does — and on failure it silently runs the **old** assembly
 
-After editing `BridgeActions.cs`, if you send a command while still in Play mode,
-the new action won't be recognized (Unity doesn't recompile scripts during Play mode).
+Two related traps, both about your code and the running code being out of sync.
 
-**Countermeasure**: `stop` → wait for the compile → `play` again.
+### 2a. No recompilation during Play mode
+
+After editing `BridgeActions.cs`, sending a command while still in Play mode won't see the new
+action — Unity doesn't recompile scripts during Play mode.
+
+### 2b. A failed compile keeps the **last good** assembly loaded
+
+This one is far more dangerous. When C# compilation fails, Unity keeps running the **previous
+successful** assembly. So:
+
+- every action still responds
+- the bridge still looks perfectly healthy
+- **but you're driving old code, and every result you get is a false success**
+
+Nothing in the response tells you this. You can spend a long time believing a fix worked when it
+was never loaded.
+
+### Countermeasure
+
+Do **not** hand-roll this in each script — the tool ships it:
+
+```bash
+python tools/bridge.py compile      # waits for compilation, prints errors, exits non-zero on failure
+```
+
+```
+编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，此时驱动得到的是旧代码的结果。
+  Assets/Editor/MyActions.cs(578,18): error CS1001: Identifier expected
+```
+
+`send` also runs a guard by default: if compilation has failed it **refuses to send** rather than
+hand you stale results (`--no-guard` opts out). Underneath, both use the `compile_status` action,
+which reports `{isCompiling, compilationFailed, ready}` from `EditorUtility.scriptCompilationFailed`.
+
+For the full recompile cycle:
 
 ```bash
 python tools/bridge.py send stop
-sleep 15                                    # wait for compilation
+sleep 15                            # let Unity recompile
+python tools/bridge.py compile      # PASS/FAIL — don't drive until it passes
 python tools/bridge.py send play
-python tools/bridge.py actions              # confirm the new action showed up
 ```
 
-In automation scripts, waiting a fixed 15–25 seconds after `stop` is safer
-(a large project takes longer on the first compile).
+> **If the compile never starts**, the editor probably never noticed the file change. Bring the
+> editor window to the foreground — Unity refreshes assets on focus. (Same root cause as pitfall 1:
+> an unfocused editor does less than you'd expect.)
 
 ---
 

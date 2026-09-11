@@ -1,0 +1,20 @@
+feat: 编译守卫 —— 编译失败时拒绝驱动，杜绝「假成功」
+
+C# 编译失败时 Unity 会保留**上一次成功**的程序集继续运行：所有 action 照常响应、
+桥看起来完全健康，但你驱动的是旧代码，拿到的每个结果都是假成功，而且回包里
+没有任何东西会提示这件事。这是最隐蔽的一类误判，必须由工具兜住，
+而不是让每个调用方自己记得检查。
+
+- BridgeActions.cs 新增 compile_status：用 EditorUtility.scriptCompilationFailed
+  返回 {isCompiling, compilationFailed, isUpdating, ready}
+- bridge.py 新增 compile 子命令：等编译结束、失败时打印 error CS 行、退出码非 0
+- bridge.py send 默认带守卫：编译失败直接拒绝发送（--no-guard 可关）
+- 桥不支持 compile_status 时优雅降级（跳过守卫 / 退回只看日志）
+
+文档同步：
+- docs/pitfalls.md #2 扩写为「Unity 不会在你以为的时候重新编译」，
+  覆盖 2a 播放模式不重编译 与 2b 编译失败跑旧程序集
+- AGENTS.md 工作流第③步改为「编译并校验」，明确不可跳过
+- README / README.zh-CN 日常用法补上 bridge.py compile
+
+Co-Authored-By: Claude <noreply@anthropic.com>

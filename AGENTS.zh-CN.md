@@ -40,12 +40,17 @@ python tools/bridge.py --project <Unity工程根目录> actions
 ```
 ① 读代码        →  搞清「怎样才能到达那个现场」
 ② 加 action     →  在 BridgeActions.cs（或你自己的 actions 文件）里写一个最直达的方法
-③ 编译          →  Unity 自动编译，几秒
+③ 编译并校验    →  bridge.py compile   ← 必须过；编译失败时 Unity 会偷偷跑旧程序集
 ④ 驱动          →  bridge.py send <action> --arg k=v ...
 ⑤ 读状态+日志   →  bridge.py send <action> / bridge.py log --tail 100
 ⑥ 定位 → 改代码 → 回到 ③
 ⑦ 跑通后        →  bridge.py recipe save <名字>   ← 把这条链路固化下来
 ```
+
+> **第 ③ 步不能省。** C# 编译失败时，Unity 会继续用**上一次成功**的程序集运行：
+> 所有 action 照常响应、桥看起来完全健康，**但你拿到的每个结果都是旧代码的假成功**。
+> `bridge.py compile` 就是为了抓这个；编译没通过时 `send` 会直接拒绝驱动。
+> 详见[坑 #2](docs/pitfalls.zh-CN.md)。
 
 > **关于第 ① 步 —— 一条建议：用代码图谱代替 grep。**
 > 在大型工程里 `grep` 既吃上下文又误导你（同名类、字符串字面量、注释都会命中）。
@@ -128,7 +133,7 @@ python tools/bridge.py send frame
 - `frameCount` 不动 → **循环被挂起了**（编辑器失焦 / 暂停 / 正在编译）。
   此时所有异步系统都不会推进，**看起来像的一切问题都是假象**
 
-详细分析见 [`docs/pitfalls.md`](docs/pitfalls.md)。这是最容易误判的一类问题。
+详细分析见 [`docs/pitfalls.md`](docs/pitfalls.zh-CN.md)。这是最容易误判的一类问题。
 
 ---
 

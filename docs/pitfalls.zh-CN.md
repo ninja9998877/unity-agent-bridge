@@ -74,21 +74,53 @@ python tools/bridge.py send frame      # 隔几秒再发一次，比对 frameCou
 
 ---
 
-## 2. 播放模式下 Unity **不会重新编译脚本**
+## 2. Unity 不会在你以为的时候重新编译 —— 而且编译失败时会偷偷用**旧程序集**
+
+两个相关的坑，本质都是「你在跑的代码」和「你以为在跑的代码」不一致。
+
+### 2a. 播放模式下不重编译
 
 改完 `BridgeActions.cs` 后发指令，如果当时正在播放模式，新 action 不会被认出来
 （Unity 不会在 Play 模式下做脚本重编译）。
 
-**对策**：`stop` → 等编译完 → 再 `play`。
+### 2b. 编译失败时，Unity 继续用**上一次成功**的程序集
+
+这个危险得多。C# 编译失败时，Unity 会保留**上一次编译成功**的程序集继续运行，于是：
+
+- 所有 action 照常响应
+- 桥看起来完全健康
+- **但你驱动的是旧代码，拿到的每一个结果都是假成功**
+
+回包里没有任何东西会告诉你这件事。你可能长时间以为某个修改生效了，其实它根本没被加载。
+
+### 对策
+
+**不要在每个脚本里自己搓** —— 工具自带：
+
+```bash
+python tools/bridge.py compile      # 等编译结束、打印错误、失败时退出码非 0
+```
+
+```
+编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，此时驱动得到的是旧代码的结果。
+  Assets/Editor/MyActions.cs(578,18): error CS1001: Identifier expected
+```
+
+`send` 默认也带守卫：编译失败时**拒绝发送**，而不是把旧结果给你（`--no-guard` 可关）。
+两者底层都是 `compile_status` action，用 `EditorUtility.scriptCompilationFailed` 判断，
+返回 `{isCompiling, compilationFailed, ready}`。
+
+完整的重编译周期：
 
 ```bash
 python tools/bridge.py send stop
-sleep 15                                    # 等编译
+sleep 15                            # 让 Unity 重编译
+python tools/bridge.py compile      # 通过才继续，不通过就别驱动
 python tools/bridge.py send play
-python tools/bridge.py actions              # 确认新 action 出现了
 ```
 
-写自动化脚本时，`stop` 之后固定等 15~25 秒比较稳（大工程首次编译更久）。
+> **如果编译压根没启动**，多半是编辑器没注意到文件变化。把编辑器窗口切到前台 ——
+> Unity 在获得焦点时才会刷新资源。（和坑 1 同源：失焦的编辑器比你以为的"少干很多活"。）
 
 ---
 

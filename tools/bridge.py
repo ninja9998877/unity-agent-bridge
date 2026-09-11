@@ -398,6 +398,67 @@ def cmd_recipe_list(_bridge, args):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# 编译守卫
+#
+# ⚡ C# 编译失败时，Unity 会继续用**上一次成功的程序集**运行 ——
+#    所有 action 照常响应，但跑的是旧代码。于是驱动「成功」了，拿到的却是旧结果。
+#    这是最隐蔽的一类误判，必须由工具兜住，而不是每个调用方自己记得检查。
+# ─────────────────────────────────────────────────────────────────────
+
+def recent_compile_errors(log_path=None, limit=30):
+    """从 Editor.log 里取最后一次编译失败的错误行"""
+    path = log_path or editor_log_path()
+    if not os.path.isfile(path):
+        return []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    start = 0
+    for i in range(len(lines) - 1, -1, -1):       # 定位最后一次编译开始
+        if "Starting script compilation" in lines[i]:
+            start = i
+            break
+    errs = [l.strip() for l in lines[start:] if "error CS" in l]
+    return sorted(set(errs))[:limit]
+
+
+def compile_check(bridge, timeout=60.0, log_path=None):
+    """等编译结束并返回 (ok, 错误行列表)。桥不支持 compile_status 时退回只看日志。"""
+    deadline = time.time() + timeout
+    st = bridge.send("compile_status", record=False, quiet=True)
+
+    if st is None or not st.get("ok"):
+        # 旧版桥没有该 action —— 只能看日志，判断不了 isCompiling，尽力而为
+        errs = recent_compile_errors(log_path)
+        return (not errs), errs
+
+    state = st.get("state") or {}
+    while state.get("isCompiling") and time.time() < deadline:
+        time.sleep(1.0)
+        again = bridge.send("compile_status", record=False, quiet=True)
+        if again and again.get("ok"):
+            st, state = again, again.get("state") or {}
+
+    if not state.get("compilationFailed"):
+        return True, []
+    return False, recent_compile_errors(log_path)
+
+
+def guard_before_drive(bridge, log_path=None):
+    """发送前守卫：编译失败就返回提示语，否则 None"""
+    st = bridge.send("compile_status", record=False, quiet=True)
+    if st is None or not st.get("ok"):
+        return None                                # 桥不支持 —— 跳过守卫
+    if (st.get("state") or {}).get("compilationFailed"):
+        errs = recent_compile_errors(log_path)
+        detail = ("\n  " + "\n  ".join(errs[:10])) if errs else ""
+        return ("编译失败，拒绝驱动：Unity 仍在用上一次成功的程序集运行，"
+                "此时拿到的会是旧代码的结果。" + detail)
+    return None
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────
 # 命令行
 # ─────────────────────────────────────────────────────────────────────
 
@@ -425,6 +486,12 @@ def build_parser():
     sp.add_argument("--arg", action="append", default=[], metavar="k=v")
     # SUPPRESS：不给就沿用全局 --timeout，不要用 None 覆盖掉
     sp.add_argument("--timeout", type=float, default=argparse.SUPPRESS)
+    sp.add_argument("--no-guard", action="store_true",
+                    help="跳过编译守卫（默认：编译失败时拒绝发送，避免拿到旧程序集的假结果）")
+
+    cp = sub.add_parser("compile", help="等 Unity 编译结束并报结果；编译失败时退出码非 0")
+    cp.add_argument("--timeout", type=float, default=180.0, help="等待上限秒数，默认 180")
+    cp.add_argument("--log", default=None, help="手动指定 Editor.log 路径")
 
     sp = sub.add_parser("wait", help="反复轮询直到某个路径满足条件")
     sp.add_argument("--action", required=True, help="用来轮询的 action（应是只读的）")
@@ -502,11 +569,28 @@ def main():
         return 0
 
     if args.cmd == "send":
+        if not args.no_guard:
+            blocked = guard_before_drive(bridge)
+            if blocked:
+                die(blocked)
         result = bridge.send(args.action, parse_arg_pairs(args.arg), timeout=args.timeout)
         if result is None:
             die("超时，没收到结果")
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
+
+    if args.cmd == "compile":
+        ok, errs = compile_check(bridge, timeout=args.timeout, log_path=args.log)
+        if ok:
+            print("编译通过 ✓")
+            return 0
+        print("编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，"
+              "此时驱动得到的是旧代码的结果。", file=sys.stderr)
+        for e in errs:
+            print("  " + e, file=sys.stderr)
+        if not errs:
+            print("  （没能从日志提取到 error CS 行，请直接看 Editor.log）", file=sys.stderr)
+        return 1
 
     if args.cmd == "wait":
         ok, last = bridge.wait_for(args.action, parse_arg_pairs(args.arg),

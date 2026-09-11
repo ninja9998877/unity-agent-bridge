@@ -106,6 +106,27 @@ namespace AgentBridge
             return new JObject { ["isPaused"] = EditorApplication.isPaused };
         }
 
+        /// <summary>
+        /// 编译状态。**改完代码要先调它**：
+        /// C# 编译失败时 Unity 会继续用**上一次成功的程序集**运行，
+        /// 于是所有 action 照常响应 —— 但跑的是旧代码，结果全是假成功。
+        /// 这是最隐蔽的一类"查了半天查不出"。
+        /// </summary>
+        [BridgeAction("compile_status")]
+        public static JObject CompileStatus()
+        {
+            bool failed = EditorUtility.scriptCompilationFailed;
+            bool compiling = EditorApplication.isCompiling;
+            return new JObject
+            {
+                ["isCompiling"] = compiling,
+                ["compilationFailed"] = failed,
+                ["isUpdating"] = EditorApplication.isUpdating,
+                // ready = 可以安全驱动
+                ["ready"] = !compiling && !failed,
+            };
+        }
+
         /// <summary>手动把编辑器窗口拉回前台（播放循环会因失焦停摆）</summary>
         [BridgeAction("focus")]
         public static JObject Focus()

@@ -43,12 +43,17 @@ Consider setting `AGENTBRIDGE_PROJECT` so you can drop `--project`.
 ```
 ① Read the code  → figure out how to reach the target state
 ② Add an action  → one straight-to-the-point method in BridgeActions.cs (or your own actions file)
-③ Compile        → Unity recompiles automatically, a few seconds
+③ Compile+verify → bridge.py compile   ← MUST pass; a failed compile silently runs the OLD assembly
 ④ Drive          → bridge.py send <action> --arg k=v ...
 ⑤ Read state+log → bridge.py send <action> / bridge.py log --tail 100
 ⑥ Locate → fix   → back to ③
 ⑦ Chain works    → bridge.py recipe save <name>     ← freeze it before you lose it
 ```
+
+> **Never skip step ③.** When C# compilation fails, Unity keeps running the **last successful**
+> assembly: every action still responds, the bridge looks healthy, and **every result you get is a
+> false success** from old code. `bridge.py compile` catches this, and `send` refuses to drive at
+> all while compilation is broken. See [pitfalls #2](docs/pitfalls.md).
 
 > **On step ① — a suggestion: use a code graph instead of grepping.**
 > On a large codebase `grep` both burns your context and misleads you (same-named classes, string

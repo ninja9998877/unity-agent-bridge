@@ -134,6 +134,7 @@ python tools/bridge.py send ping
 #   public static JObject EnterBattle(int battleId, int round, int seed = 0) { ... }
 
 # 编译完后驱动：
+python tools/bridge.py compile                             # 必须先过，否则驱动到的是旧代码
 python tools/bridge.py session clear                       # 开始记录
 python tools/bridge.py send play
 python tools/bridge.py send login --arg account=test01 --arg password=xxx

@@ -139,6 +139,7 @@ Say you need to reproduce "buffs render wrong on round 5 of battle X":
 
 # Once compiled, it drives the game:
 
+python tools/bridge.py compile                             # MUST pass before driving
 python tools/bridge.py session clear                       # start recording
 python tools/bridge.py send play
 python tools/bridge.py send login --arg account=test01 --arg password=xxx
