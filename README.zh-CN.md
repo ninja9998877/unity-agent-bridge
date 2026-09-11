@@ -124,6 +124,41 @@ python tools/bridge.py recipe run battle-100001-r5              # 以后一条�
 python tools/bridge.py recipe run battle-100001-r5 --from 4     # 或只复用后半段
 ```
 
+## 强烈建议：配一个代码图谱（符号级检索）
+
+**这个工具的价值，取决于 agent 能不能快速搞清「现场是怎么到达的」——而那一步全靠读代码。**
+
+在大型 Unity 工程里 `grep` 是场灾难：`Assets/` 巨大、同名类遍地、字符串匹配经常被不相干的东西命中，
+一次搜索吐回几十个文件把上下文吃光，还未必找对。**搜索效率直接决定 agent 能不能干活、以及每次要烧多少 token。**
+
+所以建议配一个**符号级**的代码检索工具：
+
+### 首选：[Serena](https://github.com/oraios/serena)
+
+MCP 工具集，基于 LSP 做**符号级**的检索、编辑与重构 —— 找定义、找引用、跨文件重命名都是一次调用。
+**支持 C#**（以及 40+ 种语言），能直接接进 Claude Code / Cursor / Codex 等客户端。
+
+对 Unity 工程的实际差别：
+
+| | grep | 符号级检索 |
+|---|---|---|
+| 「这个 UI 面板谁在打开」 | 搜字符串，命中一堆同名类和注释 | 一次 `find_referencing_symbols` |
+| 「这个 VO 定义在哪」 | 逐个文件翻 | 一次 `find_symbol` |
+| 上下文开销 | 高（整行整块 + 无关文件） | 低（只回符号与引用） |
+| 准确性 | 被同名类、字符串字面量骗 | 按语义解析 |
+
+### 轻量备选：[ast-grep](https://github.com/ast-grep/ast-grep)
+
+基于 tree-sitter 的结构化搜索 CLI，不依赖 MCP，适合「精确找出所有调用点」这类场景。
+只想加一个命令、不想装 server 的话用它。
+
+### 自己建也行
+
+关键不是用哪个工具，而是**按符号检索，而不是按文本检索**。
+用 tree-sitter 解析代码、把定义与引用存进 SQLite 或内存图，再写个查询脚本，效果是一样的。
+
+---
+
 ## 这东西算什么？（Skill / MCP / 本工具）
 
 **一句话：MCP 是「你先把工具做好给 agent 用」；本工具是「agent 自己造工具」。**
