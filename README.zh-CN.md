@@ -213,7 +213,8 @@ Skill 不执行任何东西，它的价值在传授**判断力**：什么时候�
 - `PlayerSettings.runInBackground = true` **对编辑器播放循环无效**
 - `Application.isFocused` **不可靠**——失焦时它仍返回 `true`
 
-`play` 动作已内置自动抢焦点作为对策。完整分析见 [`docs/pitfalls.md`](docs/pitfalls.zh-CN.md)。
+`play` 动作已内置自动抢焦点作为对策。完整分析见 [`docs/pitfalls.md`](docs/pitfalls.zh-CN.md)，
+踩坑全过程（含实测数据、误判经过）见 [`articles/`](articles/unity-editor-focus-play-loop-stall.zh-CN.md)。
 
 ## 目录结构
 
@@ -229,6 +230,8 @@ unity-agent-bridge/
 │   ├── recipes.md                  链路保存与复用
 │   ├── pitfalls.md                 踩过的坑（失焦停摆排第一）
 │   └── open-sourcing.md            加项目内容前的脱敏清单
+├── articles/                       # 对外发布用的技术文章（可自由转载）
+│   └── unity-editor-focus-play-loop-stall.md   失焦停摆的完整复盘
 ├── unity/Assets/Editor/AgentBridge/
 │   ├── AgentBridge.cs              骨架：轮询 / 分发 / 自动抢焦点
 │   └── BridgeActions.cs            ⭐ agent 实时编辑的文件（只放通用能力）

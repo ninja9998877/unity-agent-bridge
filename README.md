@@ -230,7 +230,8 @@ Two counter-intuitive facts (both verified):
 - `Application.isFocused` **is unreliable** — it still returns `true` while unfocused
 
 The `play` action auto-refocuses the window as a countermeasure.
-Full analysis in [`docs/pitfalls.md`](docs/pitfalls.md).
+Full analysis in [`docs/pitfalls.md`](docs/pitfalls.md); the whole debugging story — measurements,
+wrong turns and all — is in [`articles/`](articles/unity-editor-focus-play-loop-stall.md).
 
 ## Layout
 
@@ -246,6 +247,8 @@ unity-agent-bridge/
 │   ├── recipes.md                  saving and reusing chains
 │   ├── pitfalls.md                 the pits we fell into (play-loop stall is #1)
 │   └── open-sourcing.md            scrub checklist before open-sourcing
+├── articles/                       # write-ups you're free to repost
+│   └── unity-editor-focus-play-loop-stall.md   the full debugging story
 ├── unity/Assets/Editor/AgentBridge/
 │   ├── AgentBridge.cs              skeleton: polling / dispatch / auto-refocus
 │   └── BridgeActions.cs            ⭐ the file the agent edits live (generic actions only)
