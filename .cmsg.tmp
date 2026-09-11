@@ -1,20 +1,16 @@
-feat: 编译守卫 —— 编译失败时拒绝驱动，杜绝「假成功」
+feat: compile 主动触发编译，并如实回报「是否真的编译了」
 
-C# 编译失败时 Unity 会保留**上一次成功**的程序集继续运行：所有 action 照常响应、
-桥看起来完全健康，但你驱动的是旧代码，拿到的每个结果都是假成功，而且回包里
-没有任何东西会提示这件事。这是最隐蔽的一类误判，必须由工具兜住，
-而不是让每个调用方自己记得检查。
+之前 compile 只「等」不「触发」：编辑器失焦时不会自动刷新资源，编译压根不会启动，
+而 compilationFailed 反映的是**上一次**编译的状态 —— 于是会报出「编译通过 ✓」，
+但驱动到的其实是旧程序集。这正是它本该防住的假象。
 
-- BridgeActions.cs 新增 compile_status：用 EditorUtility.scriptCompilationFailed
-  返回 {isCompiling, compilationFailed, isUpdating, ready}
-- bridge.py 新增 compile 子命令：等编译结束、失败时打印 error CS 行、退出码非 0
-- bridge.py send 默认带守卫：编译失败直接拒绝发送（--no-guard 可关）
-- 桥不支持 compile_status 时优雅降级（跳过守卫 / 退回只看日志）
-
-文档同步：
-- docs/pitfalls.md #2 扩写为「Unity 不会在你以为的时候重新编译」，
-  覆盖 2a 播放模式不重编译 与 2b 编译失败跑旧程序集
-- AGENTS.md 工作流第③步改为「编译并校验」，明确不可跳过
-- README / README.zh-CN 日常用法补上 bridge.py compile
+- BridgeActions.cs 新增 refresh：AssetDatabase.Refresh() 显式触发刷新/重编译，
+  不依赖编辑器焦点
+- bridge.py compile 先发 refresh 再等，并用两条独立证据判断「是否真的编译了」：
+  ① isCompiling 翻转（权威，快轮询以免错过零点几秒的编译）
+  ② 日志出现 script compilation（兜底，但 Unity 日志有缓冲，不能只靠它）
+- compile 的返回值从 (ok, errors) 改为 {ok, triggered, compiled, errors}，
+  调用方能分辨「编译通过」/「没编译发生」/「桥不支持 refresh」
+- 修 _new_log_text：文本模式下用字节偏移 seek 会读到错误位置（假阴性），改二进制读
 
 Co-Authored-By: Claude <noreply@anthropic.com>

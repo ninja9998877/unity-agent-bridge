@@ -107,6 +107,25 @@ namespace AgentBridge
         }
 
         /// <summary>
+        /// 强制 Unity 刷新资源、触发脚本重编译。
+        ///
+        /// ⚡ **编辑器失焦时不会自动刷新资源** —— 改完代码不显式调一次，
+        /// 编译压根不会启动，随后 `compile_status` 报的"编译通过"就是假的。
+        /// 所以 `bridge.py compile` 会先调它再等。
+        /// </summary>
+        [BridgeAction("refresh")]
+        public static JObject Refresh()
+        {
+            AssetDatabase.Refresh();
+            return new JObject
+            {
+                ["ok"] = true,
+                ["isCompiling"] = EditorApplication.isCompiling,
+                ["compilationFailed"] = EditorUtility.scriptCompilationFailed,
+            };
+        }
+
+        /// <summary>
         /// 编译状态。**改完代码要先调它**：
         /// C# 编译失败时 Unity 会继续用**上一次成功的程序集**运行，
         /// 于是所有 action 照常响应 —— 但跑的是旧代码，结果全是假成功。

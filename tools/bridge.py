@@ -421,26 +421,82 @@ def recent_compile_errors(log_path=None, limit=30):
     return sorted(set(errs))[:limit]
 
 
-def compile_check(bridge, timeout=60.0, log_path=None):
-    """等编译结束并返回 (ok, 错误行列表)。桥不支持 compile_status 时退回只看日志。"""
-    deadline = time.time() + timeout
+def _log_size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _new_log_text(path, mark):
+    """取 mark（字节偏移）之后新增的日志文本。
+    必须用二进制模式 seek —— 文本模式的 seek 只接受 tell() 返回的 opaque cookie，
+    直接给字节偏移会读到错误位置（表现为"没检测到编译"，假阴性）。"""
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "rb") as f:
+            f.seek(mark)
+            return f.read().decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return ""
+
+
+def compile_check(bridge, timeout=60.0, log_path=None, trigger=True):
+    """
+    触发一次刷新 → 等编译结束 → 返回结果 dict：
+      {ok, triggered, compiled, errors}
+
+    ⚡ 只"等"是不够的：编辑器失焦时不会自动刷新资源，编译压根不会启动。
+    更隐蔽的是 —— `compilationFailed` 反映的是**上一次**编译的状态，
+    没有新编译发生时它就是个陈旧值，会让人误以为"刚编译过且通过"。
+    所以这里额外回报 triggered / compiled，让调用方能分辨真假。
+    """
+    log = log_path or editor_log_path()
+    mark = _log_size(log)
+
+    triggered = None                      # None = 桥不支持 refresh，无法主动触发
+    if trigger:
+        r = bridge.send("refresh", record=False, quiet=True)
+        triggered = bool(r and r.get("ok"))
+
     st = bridge.send("compile_status", record=False, quiet=True)
-
     if st is None or not st.get("ok"):
-        # 旧版桥没有该 action —— 只能看日志，判断不了 isCompiling，尽力而为
-        errs = recent_compile_errors(log_path)
-        return (not errs), errs
+        # 旧版桥没有 compile_status —— 判断不了编译状态，退回只看日志
+        errs = recent_compile_errors(log)
+        return {"ok": not errs, "triggered": triggered, "compiled": None, "errors": errs}
 
+    deadline = time.time() + timeout
     state = st.get("state") or {}
-    while state.get("isCompiling") and time.time() < deadline:
-        time.sleep(1.0)
+    stable = 0
+    saw_compiling = bool(state.get("isCompiling"))
+    time.sleep(0.3)                       # 只等一小会就开轮询：编译可能只有零点几秒
+    while time.time() < deadline:
         again = bridge.send("compile_status", record=False, quiet=True)
         if again and again.get("ok"):
-            st, state = again, again.get("state") or {}
+            state = again.get("state") or {}
+        if state.get("isCompiling") or state.get("isUpdating"):
+            saw_compiling = True
+            stable = 0
+        else:
+            stable += 1
+            if stable >= 3:               # 连续几次都空闲，才算真的编译完了
+                break
+        time.sleep(0.4)
 
-    if not state.get("compilationFailed"):
-        return True, []
-    return False, recent_compile_errors(log_path)
+    # 判断「是否真的发生了编译」：isCompiling 翻转是权威信号；
+    # 日志作为兜底，但 Unity 的日志有缓冲，不能只靠它（会假阴性）
+    time.sleep(2.0)                       # 给日志一点落盘时间
+    new_text = _new_log_text(log, mark)
+    compiled = saw_compiling or ("script compilation" in new_text) or ("error CS" in new_text)
+
+    failed = bool(state.get("compilationFailed"))
+    return {
+        "ok": not failed,
+        "triggered": triggered,
+        "compiled": compiled,
+        "errors": recent_compile_errors(log) if failed else [],
+    }
 
 
 def guard_before_drive(bridge, log_path=None):
@@ -580,15 +636,20 @@ def main():
         return 0 if result.get("ok") else 1
 
     if args.cmd == "compile":
-        ok, errs = compile_check(bridge, timeout=args.timeout, log_path=args.log)
-        if ok:
-            print("编译通过 ✓")
+        r = compile_check(bridge, timeout=args.timeout, log_path=args.log)
+        if r["ok"]:
+            notes = []
+            if r["compiled"] is False:
+                notes.append("未检测到新的编译发生（源码没变？或刷新没生效）")
+            if r["triggered"] is False:
+                notes.append("⚠️ 桥不支持 refresh，无法主动触发编译，请先聚焦编辑器")
+            print("编译通过 ✓" + ("　·　" + "；".join(notes) if notes else ""))
             return 0
         print("编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，"
               "此时驱动得到的是旧代码的结果。", file=sys.stderr)
-        for e in errs:
+        for e in r["errors"]:
             print("  " + e, file=sys.stderr)
-        if not errs:
+        if not r["errors"]:
             print("  （没能从日志提取到 error CS 行，请直接看 Editor.log）", file=sys.stderr)
         return 1
 
