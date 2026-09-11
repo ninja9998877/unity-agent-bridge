@@ -64,10 +64,10 @@ Compared with the two usual alternatives:
 
 | | OS-level automation (screenshot + clicks) | Unity's test framework | **This tool** |
 |---|---|---|---|
-| OS-level interaction | ✅ required (mouse injection, coordinate calibration) | ❌ | ❌ **not needed** |
-| Unity API / package setup | — | ✅ package + asmdef config | ❌ **not needed** |
-| Version ceiling | — | tied to the package version | **none** (measured on 2020.3) |
-| Can verify UI feel / rendering | ✅ | ❌ | ❌ (that's OS-level's turf) |
+| **No OS-level interaction needed** | ❌ needs mouse injection + coordinate calibration | ✅ | ✅ |
+| **No package / asmdef setup** | ✅ | ❌ package + config required | ✅ |
+| **No version ceiling** | ✅ | ❌ tied to the package version | ✅ |
+| **Can verify UI feel / rendering** | ✅ | ❌ | ❌ that's OS-level's turf |
 
 - **No OS-level automation.** Nothing clicks coordinates or injects mouse events, so nothing depends
   on screen resolution, window position or DPI calibration — and you never get "I clicked but it
