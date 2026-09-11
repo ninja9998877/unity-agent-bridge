@@ -273,6 +273,17 @@ The `play` action auto-refocuses the window as a countermeasure.
 Full analysis in [`docs/pitfalls.md`](docs/pitfalls.md); the whole debugging story — measurements,
 wrong turns and all — is in [`articles/`](articles/unity-editor-focus-play-loop-stall.md).
 
+**The second one**: a **native modal dialog** (usually **"Save Changes?"** when the scene is dirty)
+freezes the editor just as completely — the bridge goes silent and every command times out.
+
+```bash
+python tools/bridge.py unblock     # finds it and clicks "Don't Save" — never "Save"
+```
+
+`send` runs this check automatically on timeout. But the general rule is simpler:
+
+> **If nothing has responded for over a minute, look at the screen** instead of continuing to wait.
+
 ## Layout
 
 ```
@@ -380,6 +391,16 @@ python tools/bridge.py send frame      # send it twice a few seconds apart, comp
   Nothing async advances, so **every "anomaly" you see is an illusion**
 
 > **Never claim "it's a network/resource problem" without `frame` evidence.**
+
+And when *no command answers at all*, in this order:
+
+```bash
+python tools/bridge.py unblock        # ① a native modal? (freezes the editor outright)
+python tools/bridge.py send frame     # ② is the loop even alive?
+python tools/bridge.py compile        # ③ did a compile break and leave the old assembly running?
+```
+
+> **Over a minute with no response → look at the screen.** Don't keep waiting.
 
 ## Reusing a chain that worked
 

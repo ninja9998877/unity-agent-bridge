@@ -255,6 +255,17 @@ Skill 不执行任何东西，它的价值在传授**判断力**：什么时候�
 `play` 动作已内置自动抢焦点作为对策。完整分析见 [`docs/pitfalls.md`](docs/pitfalls.zh-CN.md)，
 踩坑全过程（含实测数据、误判经过）见 [`articles/`](articles/unity-editor-focus-play-loop-stall.zh-CN.md)。
 
+**还有第二个**：**原生模态框**（最常见是场景脏了之后的「Save Changes?」）会把编辑器冻得一样彻底
+—— 桥完全没响应，每条指令都只是超时。
+
+```bash
+python tools/bridge.py unblock     # 找到它并点「不保存」—— 绝不点「保存」
+```
+
+`send` 超时后会自动跑这个检查。但通用规则更简单：
+
+> **超过一分钟没有任何反馈，就去看屏幕，不要接着等。**
+
 ## 目录结构
 
 ```
@@ -360,6 +371,16 @@ python tools/bridge.py send frame      # 隔几秒再发一次，比对 frameCou
   此时所有异步系统都不推进，**你看到的一切"异常"都是假象**
 
 > **别在没有 `frame` 证据的情况下断言"是网络问题 / 资源问题"。**
+
+而**所有指令都不回话**时，按这个顺序排查：
+
+```bash
+python tools/bridge.py unblock        # ① 是不是弹了原生模态框？（编辑器会整个冻住）
+python tools/bridge.py send frame     # ② 循环还活着吗？
+python tools/bridge.py compile        # ③ 是不是编译挂了、Unity 还在跑旧程序集？
+```
+
+> **超过一分钟没反馈 → 看屏幕，别接着等。**
 
 ## 复用跑通的链路
 

@@ -76,7 +76,34 @@ python tools/bridge.py send frame      # send again a few seconds later, compare
 
 ---
 
-## 2. Unity doesn't recompile when you think it does — and on failure it silently runs the **old** assembly
+## 2. A native modal dialog freezes the whole editor — and the bridge goes silent
+
+If Unity pops a **native modal** (most often **"Save Changes?"** when the scene is dirty), **the
+whole editor freezes**. The bridge stops responding entirely — every command just times out.
+
+From the outside this looks exactly like "Unity is stuck" or "the network is slow", so it is easy to
+burn a lot of time waiting. It is a separate Win32 `#32770` window, so **look at the screen** — a
+screenshot will show it immediately.
+
+**Countermeasure** — the tool ships it:
+
+```bash
+python tools/bridge.py unblock
+# {"ok":true,"dismissed":1,"clicked":"Don't Save"}
+```
+
+It finds those dialogs and clicks the **non-committing** button ("Don't Save" / "No" / "Cancel") —
+**never "Save"**, which would write to your project files (scenes, prefabs). `send` also runs this
+check automatically when a command times out.
+
+> Windows-only (Win32 `EnumWindows` + `BM_CLICK`).
+
+**The general rule: if nothing has responded for over a minute, look at the screen** instead of
+continuing to wait.
+
+---
+
+## 3. Unity doesn't recompile when you think it does — and on failure it silently runs the **old** assembly
 
 Two related traps, both about your code and the running code being out of sync.
 
@@ -129,7 +156,7 @@ python tools/bridge.py send play
 
 ---
 
-## 3. Reading a stale result
+## 4. Reading a stale result
 
 If you only write the `cmd` file without clearing the `result` file, and Unity happens to be slow
 to respond, you can read the *previous* `result` and believe the command already ran.
@@ -139,7 +166,7 @@ Do the same if you implement this yourself.
 
 ---
 
-## 4. Unity reads a half-written command file
+## 5. Unity reads a half-written command file
 
 While your process is mid-write on the `cmd` file, Unity's poll can read **a partial JSON document**
 and fail to parse it.
@@ -156,7 +183,7 @@ The Unity side should also never crash on a parse failure — return `{"ok": fal
 
 ---
 
-## 5. The same command running twice
+## 6. The same command running twice
 
 If the `cmd` file isn't deleted after reading, the next poll executes it again — and if that
 command was `play` or something that sends a message, the consequences are ugly.
@@ -165,7 +192,7 @@ command was `play` or something that sends a message, the consequences are ugly.
 
 ---
 
-## 6. The `Temp/` directory may not exist
+## 7. The `Temp/` directory may not exist
 
 A project that has never been opened has no `Temp/` yet, so writing the command file fails.
 
@@ -174,7 +201,7 @@ fails with a clear message.
 
 ---
 
-## 7. Mojibake on the Windows console
+## 8. Mojibake on the Windows console
 
 Python defaults to GBK output on Windows, turning non-ASCII logs into garbage.
 
@@ -192,7 +219,7 @@ for s in (sys.stdout, sys.stderr):
 
 ---
 
-## 8. Where the editor log lives
+## 9. Where the editor log lives
 
 You'll read it constantly while debugging:
 
@@ -212,7 +239,7 @@ python tools/bridge.py log --tail 50 --grep "YOUR_TAG"
 
 ---
 
-## 9. Batchmode and the editor can't run at the same time
+## 10. Batchmode and the editor can't run at the same time
 
 Opening the same project with two Unity instances crashes outright
 (`HandleProjectAlreadyOpenInAnotherInstance`), and the error message is long enough

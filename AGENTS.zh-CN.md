@@ -50,7 +50,7 @@ python tools/bridge.py --project <Unity工程根目录> actions
 > **第 ③ 步不能省。** C# 编译失败时，Unity 会继续用**上一次成功**的程序集运行：
 > 所有 action 照常响应、桥看起来完全健康，**但你拿到的每个结果都是旧代码的假成功**。
 > `bridge.py compile` 就是为了抓这个；编译没通过时 `send` 会直接拒绝驱动。
-> 详见[坑 #2](docs/pitfalls.zh-CN.md)。
+> 详见[坑 #3](docs/pitfalls.zh-CN.md)。
 
 > **关于第 ① 步 —— 一条建议：用代码图谱代替 grep。**
 > 在大型工程里 `grep` 既吃上下文又误导你（同名类、字符串字面量、注释都会命中）。
@@ -132,6 +132,16 @@ python tools/bridge.py send frame
 - `frameCount` 在涨 → 循环正常，卡住是**逻辑问题**，去读日志
 - `frameCount` 不动 → **循环被挂起了**（编辑器失焦 / 暂停 / 正在编译）。
   此时所有异步系统都不会推进，**看起来像的一切问题都是假象**
+
+**所有指令都不回话**时，按顺序先排查这三样，再谈别的：
+
+```bash
+python tools/bridge.py unblock        # ① 弹了原生模态框？（编辑器会整个冻住）
+python tools/bridge.py send frame     # ② 循环还活着吗？
+python tools/bridge.py compile        # ③ 编译挂了、Unity 还在跑旧程序集？
+```
+
+> **超过一分钟没反馈 → 看屏幕。** 别接着等 —— 一个对话框能白吃掉你一小时。
 
 详细分析见 [`docs/pitfalls.md`](docs/pitfalls.zh-CN.md)。这是最容易误判的一类问题。
 

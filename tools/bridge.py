@@ -43,6 +43,34 @@ ENV_PROJECT = "AGENTBRIDGE_PROJECT"
 ENV_PREFIX = "AGENTBRIDGE_PREFIX"
 
 
+def _run_ps(script, *args):
+    """运行 PowerShell 脚本（仅 Windows）。"""
+    if not sys.platform.startswith("win"):
+        return None
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + list(args)
+    try:
+        # ⚠️ 必须显式指定 utf-8：Windows 默认用 GBK 解码子进程输出，
+        # 脚本里一旦有中文（按钮文本等）就会 UnicodeDecodeError。
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=40)
+        return (r.stdout or "").strip() or (r.stderr or "").strip()
+    except Exception:
+        return None
+
+
+def dismiss_unity_modal():
+    """
+    关掉卡住 Unity 的原生模态对话框（如「Save Changes?」）。
+    ⚠️ Unity 的模态框会让编辑器**整个卡住**，桥完全无响应 —— 表现为指令超时，
+    从外部看像"Unity 没反应"，极易误判成网络/编译问题。
+    脚本只点「不保存/否/取消」这类非提交按钮，绝不点「保存」。
+    """
+    script = os.path.join(HERE, "dismiss_unity_modal.ps1")
+    if not os.path.isfile(script):
+        return None
+    return _run_ps(script, "-Json")
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 基础工具
 # ─────────────────────────────────────────────────────────────────────
@@ -159,6 +187,15 @@ class Bridge(object):
         if result is None:
             if not quiet:
                 info("超时 %ss 未收到结果：action=%s" % (timeout, action))
+                # 最常见且最隐蔽的原因：Unity 弹了原生模态框，编辑器整个卡住。
+                # 超时后主动查一次（并顺手关掉非提交类对话框），不让人干等。
+                hint = dismiss_unity_modal()
+                if hint and '"dismissed":0' not in hint and '"dismissed": 0' not in hint:
+                    info("⚠️ 检测到 Unity 模态对话框（会让编辑器整个卡住），已尝试关闭：%s" % hint)
+                    info("   → 已关闭，重发一次通常就能通。")
+                else:
+                    info("   排查顺序：① 看屏幕有没有弹窗（bridge.py unblock）"
+                         "② frame 量循环 ③ compile_status 看编译 ④ 编辑器是否失焦")
             return None
 
         if record:
@@ -565,6 +602,10 @@ def build_parser():
     cp.add_argument("--timeout", type=float, default=180.0, help="等待上限秒数，默认 180")
     cp.add_argument("--log", default=None, help="手动指定 Editor.log 路径")
 
+    sub.add_parser("unblock",
+                   help="检查并关闭卡住 Unity 的原生模态框（如 Save Changes?）"
+                        "——它会让编辑器整个卡住，桥完全无响应")
+
     sp = sub.add_parser("wait", help="反复轮询直到某个路径满足条件")
     sp.add_argument("--action", required=True, help="用来轮询的 action（应是只读的）")
     sp.add_argument("--arg", action="append", default=[], metavar="k=v")
@@ -621,6 +662,15 @@ def main():
             lines = [l for l in lines if pat.search(l)]
         sys.stdout.write("".join(lines[-args.tail:]))
         return 0
+
+    if args.cmd == "unblock":
+        if not sys.platform.startswith("win"):
+            die("unblock 目前只实现了 Windows（macOS/Linux 需要人工点掉对话框）")
+        out = dismiss_unity_modal()
+        if out is None:
+            die("找不到 dismiss_unity_modal.ps1，或 PowerShell 执行失败")
+        print(out)
+        return 0 if '"ok":true' in out or '"ok": true' in out else 1
 
     if not args.project:
         die("没指定工程目录：加 --project <Unity 工程根目录>，"

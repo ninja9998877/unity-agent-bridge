@@ -53,7 +53,7 @@ Consider setting `AGENTBRIDGE_PROJECT` so you can drop `--project`.
 > **Never skip step ③.** When C# compilation fails, Unity keeps running the **last successful**
 > assembly: every action still responds, the bridge looks healthy, and **every result you get is a
 > false success** from old code. `bridge.py compile` catches this, and `send` refuses to drive at
-> all while compilation is broken. See [pitfalls #2](docs/pitfalls.md).
+> all while compilation is broken. See [pitfalls #3](docs/pitfalls.md).
 
 > **On step ① — a suggestion: use a code graph instead of grepping.**
 > On a large codebase `grep` both burns your context and misleads you (same-named classes, string
@@ -147,6 +147,17 @@ python tools/bridge.py send frame
 - `frameCount` increasing → the loop is fine; this is a **logic problem**, go read the log
 - `frameCount` frozen → **the loop is suspended** (editor unfocused / paused / compiling).
   Nothing async advances, so **every "anomaly" you see is an illusion**
+
+When **nothing answers at all**, check these in order — before assuming anything:
+
+```bash
+python tools/bridge.py unblock        # ① native modal dialog? (freezes the editor outright)
+python tools/bridge.py send frame     # ② is the loop alive?
+python tools/bridge.py compile        # ③ did a compile break, leaving the old assembly running?
+```
+
+> **Over a minute with no response → look at the screen.** Do not keep waiting — that is how you
+> lose an hour to a dialog box.
 
 Details in [`docs/pitfalls.md`](docs/pitfalls.md). This is the single easiest thing to misdiagnose.
 
