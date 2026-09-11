@@ -464,13 +464,28 @@ def compile_check(bridge, timeout=60.0, log_path=None, trigger=True):
     if st is None or not st.get("ok"):
         # 旧版桥没有 compile_status —— 判断不了编译状态，退回只看日志
         errs = recent_compile_errors(log)
-        return {"ok": not errs, "triggered": triggered, "compiled": None, "errors": errs}
+        return {"ok": not errs, "triggered": triggered, "compiled": None,
+                "playing": False, "errors": errs}
 
     deadline = time.time() + timeout
     state = st.get("state") or {}
-    stable = 0
     saw_compiling = bool(state.get("isCompiling"))
-    time.sleep(0.3)                       # 只等一小会就开轮询：编译可能只有零点几秒
+
+    # 第一步：等 refresh 引发的编译**真正开始**。
+    # ⚠️ 不能只等它结束 —— AssetDatabase.Refresh() 之后编译启动有延迟，
+    #    轮询窗口太短会在编译还没开始时就判定"编译完了"，于是报出假的"通过"。
+    start_deadline = min(deadline, time.time() + 20.0)
+    while not saw_compiling and time.time() < start_deadline:
+        time.sleep(0.3)
+        again = bridge.send("compile_status", record=False, quiet=True)
+        if again and again.get("ok"):
+            state = again.get("state") or {}
+            saw_compiling = bool(state.get("isCompiling") or state.get("isUpdating"))
+    if saw_compiling:
+        time.sleep(0.3)
+
+    # 第二步：等编译结束（连续几次都空闲）
+    stable = 0
     while time.time() < deadline:
         again = bridge.send("compile_status", record=False, quiet=True)
         if again and again.get("ok"):
@@ -480,7 +495,7 @@ def compile_check(bridge, timeout=60.0, log_path=None, trigger=True):
             stable = 0
         else:
             stable += 1
-            if stable >= 3:               # 连续几次都空闲，才算真的编译完了
+            if stable >= 3:
                 break
         time.sleep(0.4)
 
@@ -495,6 +510,7 @@ def compile_check(bridge, timeout=60.0, log_path=None, trigger=True):
         "ok": not failed,
         "triggered": triggered,
         "compiled": compiled,
+        "playing": bool(state.get("isPlaying")),
         "errors": recent_compile_errors(log) if failed else [],
     }
 
@@ -637,21 +653,29 @@ def main():
 
     if args.cmd == "compile":
         r = compile_check(bridge, timeout=args.timeout, log_path=args.log)
-        if r["ok"]:
-            notes = []
-            if r["compiled"] is False:
-                notes.append("未检测到新的编译发生（源码没变？或刷新没生效）")
-            if r["triggered"] is False:
-                notes.append("⚠️ 桥不支持 refresh，无法主动触发编译，请先聚焦编辑器")
-            print("编译通过 ✓" + ("　·　" + "；".join(notes) if notes else ""))
-            return 0
-        print("编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，"
-              "此时驱动得到的是旧代码的结果。", file=sys.stderr)
-        for e in r["errors"]:
-            print("  " + e, file=sys.stderr)
-        if not r["errors"]:
-            print("  （没能从日志提取到 error CS 行，请直接看 Editor.log）", file=sys.stderr)
-        return 1
+        if not r["ok"]:
+            print("编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，"
+                  "此时驱动得到的是旧代码的结果。", file=sys.stderr)
+            for e in r["errors"]:
+                print("  " + e, file=sys.stderr)
+            if not r["errors"]:
+                print("  （没能从日志提取到 error CS 行，请直接看 Editor.log）", file=sys.stderr)
+            return 1
+
+        if r.get("playing"):
+            # 编译本身是过的，但新程序集不会换到正在运行的代码上 —— 退出码单独区分
+            print("编译通过，但**当前在播放模式** ⚠️", file=sys.stderr)
+            print("  新编译出来的程序集不会换到正在运行的代码上，"
+                  "此时驱动到的仍是旧代码。先 `send stop` 再驱动。", file=sys.stderr)
+            return 3
+
+        notes = []
+        if r["compiled"] is False:
+            notes.append("未检测到新的编译发生（源码没变？或刷新没生效）")
+        if r["triggered"] is False:
+            notes.append("⚠️ 桥不支持 refresh，无法主动触发编译，请先聚焦编辑器")
+        print("编译通过 ✓" + ("　·　" + "；".join(notes) if notes else ""))
+        return 0
 
     if args.cmd == "wait":
         ok, last = bridge.wait_for(args.action, parse_arg_pairs(args.arg),

@@ -136,13 +136,17 @@ namespace AgentBridge
         {
             bool failed = EditorUtility.scriptCompilationFailed;
             bool compiling = EditorApplication.isCompiling;
+            bool playing = EditorApplication.isPlaying;
             return new JObject
             {
                 ["isCompiling"] = compiling,
                 ["compilationFailed"] = failed,
                 ["isUpdating"] = EditorApplication.isUpdating,
-                // ready = 可以安全驱动
-                ["ready"] = !compiling && !failed,
+                // ⚡ 播放模式下编译出来的新程序集**不会**换到正在运行的代码上，
+                // 要等退出播放模式。此时"编译通过"≠"你驱动的是新代码"。
+                ["isPlaying"] = playing,
+                // ready = 可以安全驱动（且驱动的是刚编译的代码）
+                ["ready"] = !compiling && !failed && !playing,
             };
         }
 
