@@ -35,3 +35,7 @@ Thumbs.db
 # 上游仓库只保留示例，自己的 recipe 请放在私有目录或用 --recipe-dir 指到仓库外。
 tools/recipes/*.json
 !tools/recipes/example-smoke-test.json
+
+# 临时文件（如写提交信息用的 .cmsg.tmp）
+*.tmp
+*.tmp.md
