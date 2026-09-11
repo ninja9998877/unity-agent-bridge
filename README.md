@@ -128,46 +128,6 @@ python tools/bridge.py recipe run battle-100001-r5              # replay the who
 python tools/bridge.py recipe run battle-100001-r5 --from 4     # or just reuse the tail
 ```
 
-## Strongly recommended: pair it with a code graph (symbol-level search)
-
-**The value of this tool depends on how fast the agent can figure out *how to reach* the state —
-and that step is all about reading code.**
-
-In a large Unity project, `grep` is a disaster: a huge `Assets/` tree, same-named classes everywhere,
-string matches constantly hitting irrelevant things. One search dumps dozens of files into the
-context window, burns tokens, and still may not be right.
-**Search efficiency decides whether the agent can do the job at all — and what each attempt costs.**
-
-So pair it with a **symbol-level** code retrieval tool:
-
-### First choice: [Serena](https://github.com/oraios/serena)
-
-An MCP toolkit providing **symbol-level** retrieval, editing and refactoring over LSP — find a
-definition, find references, rename across files, each in one call. It **supports C#** (among 40+
-languages) and plugs into Claude Code / Cursor / Codex and other clients.
-
-What that means in practice on a Unity project:
-
-| | grep | Symbol-level |
-|---|---|---|
-| "who opens this UI panel?" | string search hits same-named classes and comments | one `find_referencing_symbols` |
-| "where is this VO defined?" | open files one by one | one `find_symbol` |
-| Context cost | high (whole lines, whole blocks, irrelevant files) | low (just the symbol and its references) |
-| Accuracy | fooled by name collisions and string literals | resolved semantically |
-
-### Lightweight alternative: [ast-grep](https://github.com/ast-grep/ast-grep)
-
-A tree-sitter-based structural search CLI. No MCP required — good for "precisely find every call
-site of X". Use it if you want one more command rather than a server.
-
-### Rolling your own works too
-
-What matters isn't which tool, but **searching by symbol rather than by text.** Parse with
-tree-sitter, store definitions and references in SQLite or an in-memory graph, write a query
-script — same effect.
-
----
-
 ## What is this, exactly? (Skill / MCP / this tool)
 
 **One line: MCP is "you build the tools first, then the agent uses them"; this tool is "the agent builds its own tools".**

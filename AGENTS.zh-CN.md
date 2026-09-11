@@ -47,13 +47,6 @@ python tools/bridge.py --project <Unity工程根目录> actions
 ⑦ 跑通后        →  bridge.py recipe save <名字>   ← 把这条链路固化下来
 ```
 
-> **关于第 ① 步：按符号检索，别按文本检索。**
-> 在大型 Unity 工程里 `grep` 既吃上下文又误导你 —— 同名类、字符串字面量、注释都会命中。
-> 改用基于 LSP / 代码图谱的符号检索（`find_symbol`、`find_referencing_symbols`），
-> 一次调用就能定位定义和调用点。可参考 [Serena](https://github.com/oraios/serena)，
-> 或 README 里的「代码图谱」一节。
-> **整条工作流的效率，取决于第 ① 步够不够便宜。**
-
 ---
 
 ## 3. 怎么动态加一个 action

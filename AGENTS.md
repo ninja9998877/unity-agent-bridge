@@ -50,13 +50,6 @@ Consider setting `AGENTBRIDGE_PROJECT` so you can drop `--project`.
 ⑦ Chain works    → bridge.py recipe save <name>     ← freeze it before you lose it
 ```
 
-> **On step ①: search by symbol, not by text.**
-> In a large Unity project `grep` burns your context and misleads you — same-named classes,
-> string literals, comments. Use an LSP-backed / graph-backed symbol search instead
-> (`find_symbol`, `find_referencing_symbols`) to locate definitions and call sites in one call.
-> See [Serena](https://github.com/oraios/serena) or the "code graph" section in the README.
-> **Everything else in this workflow depends on step ① being cheap.**
-
 ---
 
 ## 3. How to add an action on the fly
