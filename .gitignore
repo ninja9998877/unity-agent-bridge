@@ -1,0 +1,37 @@
+# ── Unity 工程产物（本仓库只是把脚本寄放在 unity/ 下，不是完整工程）──
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── 运行期产物 ──
+# recipe 是「跟项目绑定的资产」：里面会带账号、服务器 ID、业务流程等敏感信息。
+# 上游仓库只保留示例，自己的 recipe 请放在私有目录或用 --recipe-dir 指到仓库外。
+tools/recipes/*.json
+!tools/recipes/example-smoke-test.json

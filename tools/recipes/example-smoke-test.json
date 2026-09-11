@@ -1,0 +1,22 @@
+{
+  "name": "example-smoke-test",
+  "description": "最小自检：确认桥是活的、编辑器状态可读、播放循环在跑。接入新工程后先跑这个。",
+  "steps": [
+    {
+      "action": "ping",
+      "label": "链路探活"
+    },
+    {
+      "action": "list_actions",
+      "label": "看已注册的 action"
+    },
+    {
+      "action": "editor_info",
+      "label": "读编辑器状态"
+    },
+    {
+      "action": "frame",
+      "label": "量播放循环"
+    }
+  ]
+}
