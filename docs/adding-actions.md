@@ -1,62 +1,71 @@
-# 怎么加 action
+# Adding actions
 
-> 这是这套工具的核心用法。工具本身只提供骨架，**能力靠遇到问题时现场生长**。
+[English](adding-actions.md) | [简体中文](adding-actions.zh-CN.md)
 
----
-
-## 心法：先读代码，再写 action
-
-加 action 之前，必须回答一个问题：
-
-> **这个现场，正常玩是「怎么走到」的？**
-
-答案只能从代码里读出来。找那条路径上的入口方法，然后直接调它。
-
-**不要猜。** 猜出来的路径会把你带到一个"看起来对但实际不对"的状态，
-在这种状态上复现的 bug、下的结论，全是错的 —— 比到不了现场更糟糕。
+> This is the core usage of the whole toolkit. The framework only provides a skeleton —
+> **capabilities grow on the spot, as you hit problems.**
 
 ---
 
-## 找真实路径的四个入口
+## The mindset: read the code first, then write the action
 
-### 1. 项目自带的开发者工具（最快）
+Before adding an action you must answer one question:
 
-很多项目有调试面板：快速登录、跳关、发道具、切场景。
-它们**已经帮你找好了最短路径**，照抄它们的调用方式就行。
+> **How does the game *normally* get to this state?**
+
+The answer can only come from reading the code. Find the entry method on that path and call it directly.
+
+**Don't guess.** A guessed path lands you in a state that *looks* right but isn't.
+Bugs reproduced and conclusions drawn in that state are all wrong — **worse than never arriving.**
+
+> This is also why *you* write the action instead of picking from a fixed menu: the states worth
+> reaching are only discoverable by reading this specific codebase.
+
+---
+
+## Four places to find the real path
+
+### 1. The project's own developer tools (fastest)
+
+Many projects ship a debug panel: fast login, level skip, grant item, scene switch.
+They've **already found the shortest path** — just copy how they call it.
 
 ```csharp
-// 项目里的快速登录面板大概长这样：
+// A fast-login panel in the project probably looks like this:
 Type t = typeof(LoginManager);
 MethodInfo m = t.GetMethod("AccountLogin", BindingFlags.NonPublic | BindingFlags.Instance);
 m.Invoke(LoginManager.GetInstance(), new object[] { account, password });
 ```
 
-照抄的好处：**不用改业务代码**（很多调试方法原本是 private），且路径一定是对的。
+The upside: **no need to modify business code** (those debug methods are often private),
+and the path is guaranteed correct.
 
-### 2. UI 按钮的 OnClick 处理函数
+### 2. A UI button's OnClick handler
 
-按钮点下去调了谁，那就是正常流程的入口。顺着往下看几层，找到"真正干活"的那个方法。
+Whatever the button calls is the entry point of the normal flow. Follow it down a few levels
+to find the method that actually does the work.
 
-### 3. 状态机的状态转移
+### 3. State machine transitions
 
-`SetState(State.Battle)` 这类方法通常一口气把 UI、数据、场景都准备好了，很适合做入口。
+Methods like `SetState(State.Battle)` usually prepare the UI, the data and the scene in one shot —
+excellent entry points.
 
-### 4. 协议发送函数
+### 4. Protocol send functions
 
-如果是"发个请求，服务端推回来"的流程（比如聊天发指令触发战斗），
-直接调协议发送函数即可，剩下的交给服务端。
+For "send a request, server pushes something back" flows (e.g. sending a chat command that
+triggers a battle), just call the protocol sender and let the server do the rest.
 
 ---
 
-## 写 action
+## Writing the action
 
 ```csharp
-/// <summary>账号密码登录（一步到位，不经过登录界面）</summary>
+/// <summary>Account login in one step, without going through the login screen</summary>
 [BridgeAction("login")]
 public static JObject Login(string account, string password)
 {
     var mgr = GetLoginManager();
-    if (mgr == null) return Error("还没到登录界面");
+    if (mgr == null) return Error("not at the login screen yet");
 
     CallPrivate(mgr, "AccountLogin", account, password);
 
@@ -64,29 +73,29 @@ public static JObject Login(string account, string password)
     {
         ["ok"] = true,
         ["account"] = account,
-        ["hint"] = "已发起登录，稍后调 servers 看服务器列表",
+        ["hint"] = "login started, check the server list in a moment",
     };
 }
 ```
 
-### 检查清单
+### Checklist
 
-| | 要求 |
+| | |
 |---|---|
-| 签名 | `public static JObject` |
-| 特性 | `[BridgeAction("名字")]`，名字用 snake_case |
-| 命名 | `动词_对象`：`login`、`select_server`、`enter_battle`、`set_hero_level` |
-| 参数 | `int`/`float`/`bool`/`string`，名字与 `--arg k=v` 的键对应 |
-| 粒度 | **一步到位**，直达目标状态 |
-| 返回 | 带上后续要断言的状态 |
-| 随机 | **必须支持传种子** |
-| 失败 | 返回 `{"ok": false, "error": "..."}`，别抛异常 |
+| Signature | `public static JObject` |
+| Attribute | `[BridgeAction("name")]`, name in snake_case |
+| Naming | `verb_object`: `login`, `select_server`, `enter_battle`, `set_hero_level` |
+| Params | `int` / `float` / `bool` / `string`, names matching `--arg k=v` |
+| Granularity | **Straight to the point** — reach the target state directly |
+| Return | Include whatever you'll assert on |
+| Randomness | **Must accept a seed** |
+| Failure | Return `{"ok": false, "error": "..."}` — don't throw |
 
 ---
 
-## 关于随机种子（最容易忽略、后果最严重）
+## On random seeds (easiest to skip, worst to skip)
 
-有随机的场景，不固定种子就**复现不出来**：
+With randomness involved, an unfixed seed means the bug **won't reproduce at all**:
 
 ```csharp
 [BridgeAction("enter_battle")]
@@ -94,26 +103,27 @@ public static JObject EnterBattle(int battleId, int seed = 0)
 {
     if (seed != 0)
     {
-        // 找到项目里控制战斗随机数的那个 Random，固定它
-        // 常见形态：UnityEngine.Random.InitState(seed) / 自定义 RandomUtil.SetSeed(seed)
+        // Find whatever drives the battle RNG and fix it.
+        // Common shapes: UnityEngine.Random.InitState(seed) / a custom RandomUtil.SetSeed(seed)
         InitBattleRandom(seed);
     }
     ...
 }
 ```
 
-第一次复现时让 agent 试几个种子，找到能触发的那个，**记进 recipe**，以后就必现了。
+On the first repro attempt, try a few seeds until one triggers it, **record it in the recipe**,
+and from then on it's deterministic.
 
 ---
 
-## 返回什么状态
+## What state to return
 
-返回值是 agent 做断言的唯一可靠依据。**宁多勿少**，尤其是：
+The return value is your only reliable assertion basis. **Err on the side of more**, especially:
 
-- 数值类：血量、金币、等级、回合数、倒计时
-- 列表类：buff 列表、队伍成员、已解锁项
-- 状态机类：当前状态、当前场景、当前面板名
-- 计数类：某个东西有几个
+- Numeric: HP, gold, level, round, countdown
+- Lists: buffs, party members, unlocks
+- State machine: current state, current scene, current panel name
+- Counts: how many of something
 
 ```csharp
 return new JObject
@@ -131,58 +141,62 @@ return new JObject
 };
 ```
 
-**不要**只返回 `{"ok": true}` —— 那样 agent 只能靠截图和日志猜，价值大打折扣。
+**Don't** return just `{"ok": true}` — that leaves you guessing from screenshots and logs,
+which throws away most of the value.
 
 ---
 
-## 反模式
+## Anti-patterns
 
-### ✗ 模拟点击
+### ✗ Simulating clicks
 
 ```csharp
-[BridgeAction("click_login")]                  // 不要
-public static JObject ClickLogin() { /* 模拟点一下 */ }
+[BridgeAction("click_login")]                  // don't
+public static JObject ClickLogin() { /* simulate a click */ }
 ```
 
-这是 OS 层自动化（截图 + 坐标点击）该干的事。
-在编辑器内模拟点击，**又慢又脆**（UI 布局一变就废），还丢掉了这里最大的优势——直达。
+That belongs to OS-level automation (screenshot + coordinate clicking).
+Simulating clicks inside the editor is **slow and brittle** (any layout change breaks it)
+and throws away the biggest advantage here — going straight there.
 
-### ✗ 硬塞状态
+### ✗ Forcing state in
 
 ```csharp
-[BridgeAction("fake_battle")]                  // 不要
-public static JObject FakeBattle() { battle = new Battle(); ... }   // 绕过真实入场流程
+[BridgeAction("fake_battle")]                  // don't
+public static JObject FakeBattle() { battle = new Battle(); ... }   // bypasses the real entry flow
 ```
 
-绕过业务路径构造出来的状态，**根本不是线上会出现的状态**。
-在这种状态复现的 bug 是假的，修了也没意义。
+State constructed by bypassing the business path **isn't a state that ever occurs in production**.
+Bugs reproduced that way are fake, and fixing them accomplishes nothing.
 
-### ✗ 通用反射执行器
+### ✗ A generic reflection invoker
 
 ```csharp
-[BridgeAction("invoke")]                       // 不要
+[BridgeAction("invoke")]                       // don't
 public static JObject Invoke(string type, string method, JArray args) { ... }
 ```
 
-看起来"什么都能干"，实际后果是：不可审计（没人知道 agent 调了什么）、
-不可复用（一次性的调用串不进 recipe）、不可 review（代码评审时看不出意图）。
+It looks like it can "do anything", but the real consequences are: unauditable (nobody knows
+what the agent called), unreusable (one-off calls can't be captured in a recipe), and unreviewable
+(code review can't see the intent).
 
-**每个能力都显式写出来**，就是这个工具的设计立场。
+**Writing every capability out explicitly is the design position of this tool.**
 
 ---
 
-## 项目专属 action 放哪
+## Where project-specific actions go
 
-`BridgeActions.cs` 只放**通用能力**（跟具体游戏无关的那些）。
-项目专有的 action 另建文件：
+`BridgeActions.cs` holds **generic capabilities only** (nothing game-specific).
+Put project-specific actions in a separate file:
 
 ```
 Assets/Editor/AgentBridge/
-├── AgentBridge.cs            # 骨架，不动
-├── BridgeActions.cs          # 通用能力（可随上游升级）
-└── ProjectBridgeActions.cs   # ← 你的项目专属 action，不对外开源
+├── AgentBridge.cs            # skeleton, don't touch
+├── BridgeActions.cs          # generic capabilities (upgradable from upstream)
+└── ProjectBridgeActions.cs   # ← your project-specific actions, not open-sourced
 ```
 
-只要 `namespace AgentBridge` + `[BridgeAction]` 就会被发现，不需要注册。
+`namespace AgentBridge` + `[BridgeAction]` is all it takes to be discovered — no registration.
 
-这样分的好处：**通用能力可以独立升级，项目内容可以干净地留在私有仓库**。
+The benefit of splitting: **generic capabilities can be upgraded independently, and project
+content stays cleanly in a private repo.**

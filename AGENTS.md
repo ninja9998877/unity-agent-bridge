@@ -1,64 +1,69 @@
-# AGENTS.md — 给 AI agent 的工作规则
+# AGENTS.md — Working rules for AI agents
 
-你在一个 Unity 工程里工作，目标之一是**能自己到达 bug 现场**，而不是让人替你复现。
+[English](AGENTS.md) | [简体中文](AGENTS.zh-CN.md)
 
-这套工具的用法和规则都在下面。**先读完再动手。**
+You're working in a Unity project, and one of your goals is to **reach the scene of a bug yourself**
+instead of asking a human to reproduce it for you.
 
----
-
-## 0. 硬性规则
-
-1. **不要模拟人的点击。** 加 action 时要「一步到位」直达现场，不是 `click(100,200)` 点过去。
-   点坐标属于 OS 层自动化的活，不是这里的活。
-2. **加 action 前先读代码。** 搞清"这个现场是怎么到达的"，然后照那条真实路径写。
-   **猜出来的路径会把你带到错误状态，比到不了更糟。**
-3. **涉及随机的场景必须支持传随机种子。** 暴击、闪避、随机目标不固定，bug 复现不出来。
-4. **返回关键状态。** action 的返回值是你的断言依据，比看截图可靠得多。
-5. **只加读，慎加写。** 需要"驱动"就加一个显式 action（可审计、可复用）；
-   不要加通用的"执行任意方法"接口。
-6. **项目专有的 action 单独放文件**，别混进 `BridgeActions.cs`——那是通用能力，要能独立升级。
+Everything you need is below. **Read it before doing anything.**
 
 ---
 
-## 1. 先确认桥是活的
+## 0. Hard rules
+
+1. **Don't simulate human clicks.** An action should jump **straight** to the target state,
+   not walk there via `click(100,200)` sequences. Coordinate clicking is OS-level automation's job.
+2. **Read the code before adding an action.** Figure out how the game *normally* gets to that state,
+   then follow that real path. **A guessed path lands you in a wrong state — worse than not arriving at all.**
+3. **Anything random must accept a seed.** Crits, dodges, random targets — without a fixed seed the bug won't reproduce.
+4. **Return meaningful state.** Your return value is the assertion basis, and far more reliable than a screenshot.
+5. **Prefer reads over writes.** To *drive* something, add an explicit action (auditable, reusable).
+   Never add a generic "invoke any method" endpoint.
+6. **Keep project-specific actions in a separate file**, out of `BridgeActions.cs` — that file holds
+   generic capabilities and must be independently upgradable.
+
+---
+
+## 1. First, check that the bridge is alive
 
 ```bash
-python tools/bridge.py --project <Unity工程根目录> actions
+python tools/bridge.py --project <UnityProjectRoot> actions
 ```
 
-- 列出 action = 正常
-- 报"Unity 没响应" = 编辑器没开 / 脚本没编译完 / Console 里没有 `[AgentBridge] 已就绪`
+- Lists actions → you're good
+- "Unity isn't responding" → the editor isn't open / scripts haven't finished compiling /
+  the Console has no `[AgentBridge] 已就绪` line
 
-`--project` 建议设成环境变量 `AGENTBRIDGE_PROJECT`。
+Consider setting `AGENTBRIDGE_PROJECT` so you can drop `--project`.
 
 ---
 
-## 2. 标准工作流
+## 2. Standard workflow
 
 ```
-① 读代码        →  搞清「怎样才能到达那个现场」
-② 加 action     →  在 BridgeActions.cs（或你自己的 actions 文件）里写一个最直达的方法
-③ 编译          →  Unity 自动编译，几秒
-④ 驱动          →  bridge.py send <action> --arg k=v ...
-⑤ 读状态+日志   →  bridge.py send <action> / bridge.py log --tail 100
-⑥ 定位 → 改代码 → 回到 ③
-⑦ 跑通后        →  bridge.py recipe save <名字>   ← 把这条链路固化下来
+① Read the code  → figure out how to reach the target state
+② Add an action  → one straight-to-the-point method in BridgeActions.cs (or your own actions file)
+③ Compile        → Unity recompiles automatically, a few seconds
+④ Drive          → bridge.py send <action> --arg k=v ...
+⑤ Read state+log → bridge.py send <action> / bridge.py log --tail 100
+⑥ Locate → fix   → back to ③
+⑦ Chain works    → bridge.py recipe save <name>     ← freeze it before you lose it
 ```
 
 ---
 
-## 3. 怎么动态加一个 action
+## 3. How to add an action on the fly
 
-在 `BridgeActions.cs` 里加一个方法：
+Add a method to `BridgeActions.cs`:
 
 ```csharp
-/// <summary>直接到达「某场战斗的第 N 回合」</summary>
+/// <summary>Jump straight to "round N of battle X"</summary>
 [BridgeAction("enter_battle")]
 public static JObject EnterBattle(int battleId, int round, int seed = 0)
 {
-    // 1. 读代码，按项目里真实的入场路径把游戏送到目标现场
-    // 2. seed != 0 时固定随机，保证可复现
-    // 3. 返回关键状态供断言
+    // 1. Read the code; follow the project's real entry path into the target state
+    // 2. When seed != 0, fix the RNG so it's reproducible
+    // 3. Return the state you'll assert on later
     return new JObject
     {
         ["ok"] = true,
@@ -70,84 +75,97 @@ public static JObject EnterBattle(int battleId, int round, int seed = 0)
 }
 ```
 
-**要求**：
+**Requirements:**
 
-| 项 | 说明 |
+| | |
 |---|---|
-| 签名 | `public static`，返回 `JObject`（会作为 `state` 回传） |
-| 参数 | 支持 `int` / `float` / `bool` / `string`；名字与指令 `args` 的键对应 |
-| 注册 | 不需要注册，`[BridgeAction("名字")]` 会自动被发现 |
-| 命名 | `动词_对象`：`enter_battle`、`set_hero_level`、`replay_to_round` |
-| 粒度 | **一步到位**。直达目标状态，不走交互过程 |
-| 返回值 | 尽量带上后续要断言的状态 |
-| 随机 | **必须支持传种子** |
+| Signature | `public static`, returns `JObject` (comes back as `state`) |
+| Params | `int` / `float` / `bool` / `string`; names match the command's `args` keys |
+| Registration | None — `[BridgeAction("name")]` is auto-discovered |
+| Naming | `verb_object`: `enter_battle`, `set_hero_level`, `replay_to_round` |
+| Granularity | **Straight to the point.** Reach the target state directly, don't walk the interaction |
+| Return value | Include everything you'll want to assert on |
+| Randomness | **Must accept a seed** |
 
-**不要**写这种：
+**Don't write this:**
 
 ```csharp
-[BridgeAction("click_login_button")]      // ✗ 这是 OS 层干的事
-public static JObject ClickLoginButton() { /* 模拟一次点击 */ }
+[BridgeAction("click_login_button")]      // ✗ that's OS-level automation's job
+public static JObject ClickLoginButton() { /* simulate one click */ }
 ```
 
-**要**写这种：
+**Write this:**
 
 ```csharp
-[BridgeAction("login_as")]                 // ✓ 直接调用真实登录路径
+[BridgeAction("login_as")]                 // ✓ call the real login path
 public static JObject LoginAs(string account, string password)
 {
-    // 反射或直接调用项目里真正处理登录的那个方法（照抄项目自带开发者工具的写法最稳）
+    // Call whatever actually handles login (copy how the project's own dev tools do it — that's the safest bet)
 }
 ```
 
-> **找真实路径的小技巧**：很多项目自带开发者/调试面板（快速登录、跳关、发道具），
-> 它们已经帮你找到了"最短路径"，**照抄它们的调用方式**通常是最省事也最正确的做法。
+> **Tip for finding the real path**: many projects ship a developer/debug panel (fast login,
+> level skip, grant item). Those already found the shortest path — **copy how they call it.**
+> They also tend to use reflection for private methods, which means you don't have to touch
+> business code at all.
+
+### Why *you* add actions, and not someone else
+
+This is the key difference from MCP-style tooling: **MCP tools are frozen at authoring time;
+the agent cannot add one.** Here, the capability set grows at runtime because *you* write the
+methods. The set of states you'll need to reach while debugging is not enumerable in advance —
+so the toolbox has to grow with the problem. That only works if you actually add the action
+you need instead of trying to make do with what's there.
 
 ---
 
-## 4. 排查「卡住了」
+## 4. Debugging "it's stuck"
 
-**第一步永远是量播放循环活没活**，不要一上来就往网络/资源上猜：
+**Your first move is always to measure whether the play loop is alive.** Don't jump to
+network/resource theories:
 
 ```bash
 python tools/bridge.py send frame
-# 隔几秒再发一次，比对 frameCount
+# send it again a few seconds later and compare frameCount
 ```
 
-- `frameCount` 在涨 → 循环正常，卡住是**逻辑问题**，去读日志
-- `frameCount` 不动 → **循环被挂起了**（编辑器失焦 / 暂停 / 正在编译）。
-  此时所有异步系统都不会推进，**看起来像的一切问题都是假象**
+- `frameCount` increasing → the loop is fine; this is a **logic problem**, go read the log
+- `frameCount` frozen → **the loop is suspended** (editor unfocused / paused / compiling).
+  Nothing async advances, so **every "anomaly" you see is an illusion**
 
-详细分析见 [`docs/pitfalls.md`](docs/pitfalls.md)。这是最容易误判的一类问题。
+Details in [`docs/pitfalls.md`](docs/pitfalls.md). This is the single easiest thing to misdiagnose.
 
 ---
 
-## 5. 复用已经跑通的链路
+## 5. Reuse chains that already worked
 
-**每跑通一条链路，就存下来。** 不要让下一次复现从零开始。
+**Every time a chain works, save it.** Never let the next repro start from zero.
 
 ```bash
-python tools/bridge.py session clear          # 开始前清一次
-# ... 正常驱动 ...
-python tools/bridge.py recipe save my-flow    # 跑通后固化
-python tools/bridge.py recipe run my-flow     # 以后整条回放
-python tools/bridge.py recipe run my-flow --from 3   # 只复用后半段
+python tools/bridge.py session clear          # clear before starting
+# ... drive normally ...
+python tools/bridge.py recipe save my-flow    # freeze it once it works
+python tools/bridge.py recipe run my-flow     # replay the whole thing later
+python tools/bridge.py recipe run my-flow --from 3   # or reuse only the tail
 ```
 
-保存后**建议手工补两样东西**（自动生成的部分给不了）：
+After saving, **hand-edit two things** the generator can't produce:
 
-1. **`wait` / `expect`** —— 哪些步骤之后需要等，等什么条件
-2. **seed** —— 链路里带随机的步骤补上固定种子
+1. **`wait` / `expect`** — which steps need waiting, and on what condition
+2. **seed** — fix the RNG on any step that involves randomness
 
-模板、变量替换、条件等待的写法见 [`docs/recipes.md`](docs/recipes.md)。
+Syntax, variable substitution and conditional waits: [`docs/recipes.md`](docs/recipes.md).
 
-**recipe 是跟项目绑定的资产，不要提交到公开仓库**（里面会带账号、服务器 ID、业务流程）。
+**Recipes are project-bound assets. Never commit them to a public repo** — they contain
+accounts, server IDs and business flows.
 
 ---
 
-## 6. 你不该做的事
+## 6. Things you must not do
 
-- ❌ 不要为了"一步到位"就绕过真实的业务路径去硬塞状态 —— 那样复现出来的不是真 bug
-- ❌ 不要加通用的 `invoke(type, method, args)` 反射接口 —— 不可审计，也无法复用
-- ❌ 不要把项目专有逻辑写进 `BridgeActions.cs`
-- ❌ 不要在没有 `frame` 证据的情况下断言"是网络问题 / 资源问题"
-- ❌ 不要把带账号密码、内网地址、业务流程的 recipe 提交到公开仓库
+- ❌ Bypass the real code path and force state in, just to "jump straight there" — the bug you
+  reproduce won't be the real bug
+- ❌ Add a generic reflection endpoint like `invoke(type, method, args)` — unauditable, unreusable
+- ❌ Put project-specific logic into `BridgeActions.cs`
+- ❌ Claim "it's a network / resource problem" without `frame` evidence
+- ❌ Commit recipes containing accounts, passwords, internal addresses or business flows

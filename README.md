@@ -128,27 +128,47 @@ python tools/bridge.py recipe run battle-100001-r5              # replay the who
 python tools/bridge.py recipe run battle-100001-r5 --from 4     # or just reuse the tail
 ```
 
-## What is this, exactly? (skill / MCP / library)
+## What is this, exactly? (Skill / MCP / this tool)
 
-Frequently asked, so here it is once — **these are layers, not mutually exclusive**:
+**One line: MCP is "you build the tools first, then the agent uses them"; this tool is "the agent builds its own tools".**
 
-| Layer | In this project | What it answers |
-|---|---|---|
-| **Capability (tool)** | `AgentBridge.cs` + `bridge.py` | The thing that actually works, callable from a shell |
-| **Procedure (skill material)** | `AGENTS.md` + `docs/` | **How to judge**: when to add an action, what's an anti-pattern |
-| **Transport** | currently = shell CLI | A thin MCP server is also possible |
+| | Skill | MCP | **This tool** |
+|---|---|---|---|
+| Nature | Knowledge / procedure | Tool protocol | Tool + procedure |
+| **Who defines capabilities** | Whoever writes the skill | Whoever writes the server | **The agent itself, growing at runtime** |
+| **To add one capability** | Edit `SKILL.md` | Edit server code → redeploy → client reconnects | **Write one C# method → wait for compile** |
+| **When the toolset is fixed** | At load time | At server startup | **Never — it follows the problem** |
+| Can it execute? | ❌ No, it only teaches | ✅ | ✅ |
+| Transport | Loaded into context | JSON-RPC (stdio / HTTP) | File protocol + CLI |
+| Host requirement | A client that supports skills | A client that supports MCP | Any agent that can run commands |
+| Typical use | Teaching judgment and process | Stable, generic tools (DB, HTTP, filesystem) | Project-local, problem-specific probing |
 
-- **It is not an MCP server.** It uses a file protocol plus a CLI; the agent shells out to it.
-  The upside: **host-agnostic** — any agent that can run commands can use it, with zero integration work.
-- **It is not a skill either.** A skill is a knowledge bundle and doesn't execute anything on its own.
-  Here, `AGENTS.md`/`docs` are skill material — but the ability to actually reach the scene comes from `bridge.py`.
-- **It could be wrapped as MCP.** Each `[BridgeAction]` maps to an MCP tool, and the existing
-  `list_actions` is tool discovery already. The cost isn't high — the two things to handle are
-  "Unity isn't running" and refreshing the tool list after the agent adds an action
-  (`notifications/tools/list_changed`).
+### Why "the agent adds its own actions" is the essential difference
 
-**Recommendation**: start with the CLI. Wrap it in MCP only when you need to reach a sandbox
-where shell is disabled, or you want the actions to show up directly in the agent's tool list.
+The states you need to reach while debugging **cannot be enumerated in advance** — you can't
+pre-write an MCP tool for "round 5 of battle X, two stacks of aura buff, left side under 30% HP".
+
+**An MCP toolset is frozen**: adding a tool means editing the server, redeploying, and having the
+client reconnect. Here, the agent reads the code and writes a method; once Unity compiles, the
+capability exists. **The toolbox is alive.**
+
+That's also why `AGENTS.md` spends most of its length on "how to add an action" rather than
+"here are the actions".
+
+### So when is MCP the better fit?
+
+When the capability set is **known, stable, and reused across projects**: reading a database,
+making HTTP calls, manipulating the filesystem. Those are exactly right to freeze into tools.
+MCP also doesn't depend on a shell, which makes it the only option in sandboxes that disable commands.
+
+### And skills?
+
+A skill executes nothing. Its value is teaching **judgment**: when to add an action, why not to
+simulate clicks, why to measure `frame` before blaming the network. This project's `AGENTS.md` +
+`docs/` *are* that material — ready to be packaged as a skill as-is.
+
+**Recommendation**: use the CLI by default; package a skill when you want to hand over the judgment;
+reach for MCP only when you need "frozen + cross-project + no shell".
 
 ## Good fit / bad fit
 
@@ -183,9 +203,10 @@ Full analysis in [`docs/pitfalls.md`](docs/pitfalls.md).
 ```
 unity-agent-bridge/
 ├── README.md                       # this file (English)
-├── README.zh-CN.md                # 简体中文
+├── README.zh-CN.md                 # 简体中文
 ├── AGENTS.md                       # ⭐ the full spec you hand to an AI agent
-├── docs/
+├── AGENTS.zh-CN.md                 # same, in Chinese
+├── docs/                           # every doc has xxx.md (EN) + xxx.zh-CN.md (ZH)
 │   ├── architecture.md             file protocol, dispatch, relation to batchmode
 │   ├── adding-actions.md           ⭐ how to add actions on the fly
 │   ├── recipes.md                  saving and reusing chains
@@ -198,6 +219,9 @@ unity-agent-bridge/
     ├── bridge.py                   command-line driver
     └── recipes/                    the chain library
 ```
+
+> **On languages**: following GitHub convention, the canonical filename is English and Chinese
+> versions carry a `.zh-CN.md` suffix. Every document has a switcher link under its title.
 
 ## FAQ
 

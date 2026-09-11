@@ -1,30 +1,32 @@
-# recipe：链路保存与复用
+# Recipes: saving and reusing chains
 
-**每次跑通一条链路，都应该存下来。** 不要让下一次复现从零开始 ——
-登录、选服、进某个界面这些"热身步骤"每次都要重来一遍，纯属浪费。
+[English](recipes.md) | [简体中文](recipes.zh-CN.md)
+
+**Every time a chain works, save it.** Don't make the next repro start from zero —
+re-walking the warm-up steps (login, pick a server, navigate into a screen) every single time is pure waste.
 
 ---
 
-## 保存
+## Saving
 
-`session` 日志自动记录**每一次 `send`**（action + args + 是否成功）。
+The `session` log automatically records **every `send`** (action + args + whether it succeeded).
 
 ```bash
-python tools/bridge.py session clear          # 开始新复现前清一次
+python tools/bridge.py session clear          # clear before starting a new repro
 python tools/bridge.py send play
 python tools/bridge.py send login --arg account=test01 --arg password=xxx
 python tools/bridge.py send select_server --arg serverId=1001
 python tools/bridge.py send enter_battle --arg battleId=100001
 
-python tools/bridge.py recipe save my-flow    # 只保留 ok=true 的步骤
+python tools/bridge.py recipe save my-flow    # keeps only steps with ok=true
 ```
 
-生成的 `tools/recipes/my-flow.json`：
+The generated `tools/recipes/my-flow.json`:
 
 ```json
 {
   "name": "my-flow",
-  "description": "由 session 日志生成（4 步）",
+  "description": "generated from the session log (4 steps)",
   "steps": [
     { "action": "play" },
     { "action": "login", "args": { "account": "test01", "password": "xxx" } },
@@ -34,35 +36,36 @@ python tools/bridge.py recipe save my-flow    # 只保留 ok=true 的步骤
 }
 ```
 
-> ⚠️ 自动生成的是**最小可用版本**，只保证"步骤和参数对"。
-> 建议手工补 `wait` / `expect` / 变量替换 —— 见下面两节。
+> ⚠️ The generated file is a **minimal working version** — it only guarantees the steps and
+> arguments are right. Hand-edit it to add `wait` / `expect` / variables (see below).
 
 ---
 
-## 回放
+## Replaying
 
 ```bash
-# 整条
+# whole chain
 python tools/bridge.py recipe run my-flow
 
-# 只跑后半段（复用部分环节）
+# only the tail (reuse part of the chain)
 python tools/bridge.py recipe run my-flow --from 3
 
-# 只跑某一步
+# only one step
 python tools/bridge.py recipe run my-flow --only 2
 
-# 失败也继续（一次跑完看全貌）
+# keep going after failures (see the whole picture in one pass)
 python tools/bridge.py recipe run my-flow --keep-going
 ```
 
-`--from` 是"只复用部分环节"的关键：比如链路前两步是登录（一天做一次就够），
-后面才是真正要反复试的战斗，那平时就 `--from 3` 直接跳到战斗。
+`--from` is the key to "reuse only part of the chain". If the first two steps are login
+(which you only need once a day) and the interesting part is the battle that follows,
+you'd normally run `--from 3` and jump straight to it.
 
 ---
 
-## 变量替换
+## Variable substitution
 
-**不要把账号密码写死在 recipe 里。** 用 `${VAR}`：
+**Don't hard-code accounts and passwords in a recipe.** Use `${VAR}`:
 
 ```json
 {
@@ -74,21 +77,21 @@ python tools/bridge.py recipe run my-flow --keep-going
 }
 ```
 
-取值优先级：`--var` > recipe 的 `vars` > 环境变量。
+Resolution order: `--var` > the recipe's `vars` > environment variables.
 
 ```bash
 python tools/bridge.py recipe run my-flow --var ACCOUNT=test02
 PASSWORD=xxx python tools/bridge.py recipe run my-flow
 ```
 
-> 如果整个值就是一个 `${VAR}`，会保留原始类型（数字仍是数字）；
-> 嵌在字符串中间（如 `"user_${ID}"`）则按字符串拼接。
+> If the *entire* value is a single `${VAR}`, the original type is preserved (numbers stay numbers).
+> Embedded in a larger string (e.g. `"user_${ID}"`) it's concatenated as text.
 
 ---
 
-## 条件等待
+## Conditional waits
 
-很多步骤之后需要等状态变化。用 `expect`：**先触发，再轮询直到条件满足**。
+Many steps need to wait for a state change. Use `expect`: **trigger first, then poll until the condition holds.**
 
 ```json
 {
@@ -103,58 +106,56 @@ PASSWORD=xxx python tools/bridge.py recipe run my-flow
 }
 ```
 
-字段说明：
-
-| 字段 | 说明 |
+| Field | Meaning |
 |---|---|
-| `action` | **用来轮询的 action，必须是只读的**（反复调用不能有副作用） |
-| `args` | 轮询时传的参数 |
-| `path` | 结果里的路径，如 `state.curState`、`state.scenes.0` |
-| `equals` | 期望值（按字符串比较） |
-| `timeout` | 超时秒数，默认 60 |
+| `action` | **The action used for polling — it must be read-only** (calling it repeatedly must have no side effects) |
+| `args` | Arguments passed while polling |
+| `path` | Path into the result, e.g. `state.curState`, `state.scenes.0` |
+| `equals` | Expected value (compared as strings) |
+| `timeout` | Seconds before giving up, default 60 |
 
-简单的固定等待用 `wait`（秒）：
+For a simple fixed wait, use `wait` (seconds):
 
 ```json
 { "action": "select_server", "args": { "serverId": 1001 }, "wait": 5 }
 ```
 
-`label` 可以给步骤起个人看得懂的名字，回放时打印出来：
+`label` gives a step a human-readable name, printed during replay:
 
 ```json
-{ "action": "enter_battle", "args": { "battleId": 100001 }, "label": "进入战斗 100001" }
+{ "action": "enter_battle", "args": { "battleId": 100001 }, "label": "enter battle 100001" }
 ```
 
 ---
 
-## 一个完整例子
+## A complete example
 
 ```json
 {
   "name": "enter-battle",
-  "description": "登录 → 选服 → 主城 → 进入指定战斗（固定种子保证可复现）",
+  "description": "login → pick server → main city → enter a specific battle (fixed seed for reproducibility)",
   "vars": { "ACCOUNT": "test01", "SERVER": 1001 },
   "steps": [
     {
       "action": "play",
-      "label": "进入播放模式",
+      "label": "enter play mode",
       "expect": { "action": "editor_info", "path": "state.isPlaying", "equals": true, "timeout": 60 }
     },
     {
       "action": "login",
       "args": { "account": "${ACCOUNT}", "password": "${PASSWORD}" },
-      "label": "登录"
+      "label": "log in"
     },
     {
       "action": "select_server",
       "args": { "serverId": "${SERVER}" },
-      "label": "选服进主城",
+      "label": "pick server, enter main city",
       "expect": { "action": "game_state", "path": "state.curState", "equals": "CITY", "timeout": 90 }
     },
     {
       "action": "enter_battle",
       "args": { "battleId": 100001, "seed": 12345 },
-      "label": "进入战斗（种子 12345）",
+      "label": "enter battle (seed 12345)",
       "expect": { "action": "game_state", "path": "state.curState", "equals": "BATTLE", "timeout": 60 }
     }
   ]
@@ -163,13 +164,13 @@ PASSWORD=xxx python tools/bridge.py recipe run my-flow
 
 ---
 
-## ⚠️ recipe 是私有资产
+## ⚠️ Recipes are private assets
 
-recipe 里通常包含**账号、密码、服务器 ID、内部业务流程**。
-**不要提交到公开仓库。**
+A recipe typically contains **accounts, passwords, server IDs and internal business flows**.
+**Don't commit them to a public repo.**
 
-上游仓库的 `.gitignore` 已经默认忽略 `tools/recipes/*.json`。
-也可以直接把 recipe 放在仓库外：
+The upstream `.gitignore` already ignores `tools/recipes/*.json` by default.
+You can also keep recipes entirely outside the repo:
 
 ```bash
 python tools/bridge.py --recipe-dir /path/to/private-recipes recipe run my-flow

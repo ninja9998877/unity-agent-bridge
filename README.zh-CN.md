@@ -83,7 +83,7 @@ python tools/bridge.py send ping
 
 ### 3. 交给你的 AI agent
 
-把 [`AGENTS.md`](AGENTS.md) 喂给你的 agent（Claude Code / Cursor / 自建 agent 都行）。
+把 [`AGENTS.md`](AGENTS.zh-CN.md) 喂给你的 agent（Claude Code / Cursor / 自建 agent 都行）。
 
 ## 日常长什么样
 
@@ -124,25 +124,42 @@ python tools/bridge.py recipe run battle-100001-r5              # 以后一条�
 python tools/bridge.py recipe run battle-100001-r5 --from 4     # 或只复用后半段
 ```
 
-## 这东西算什么？（skill / MCP / 库）
+## 这东西算什么？（Skill / MCP / 本工具）
 
-经常被问，这里一次说清 —— **它是分层的，不互斥**：
+**一句话：MCP 是「你先把工具做好给 agent 用」；本工具是「agent 自己造工具」。**
 
-| 层 | 本项目对应 | 说明 |
-|---|---|---|
-| **能力（工具）** | `AgentBridge.cs` + `bridge.py` | 真正干活的：能被 shell 调用的命令行工具 |
-| **规程（skill）** | `AGENTS.md` + `docs/` | 告诉 agent **怎么做判断**：什么时候加 action、什么是反模式 |
-| **接入方式** | 当前 = shell CLI | 也可以再包一层 MCP server |
+| 维度 | Skill | MCP | **本工具** |
+|---|---|---|---|
+| 本质 | 知识 / 规程 | 工具协议 | 工具 + 规程 |
+| **能力由谁定义** | 写 skill 的人 | 写 server 的人 | **agent 自己，运行时生长** |
+| **加一个能力要做什么** | 改 `SKILL.md` | 改 server 代码 → 重新部署 → 客户端重连 | **写一个 C# 方法 → 等编译** |
+| **能力集何时定型** | 加载时 | server 启动时 | **事先不定型，跟着问题走** |
+| 能否执行 | ❌ 不能，只教怎么做 | ✅ | ✅ |
+| 传输方式 | 加载进上下文 | JSON-RPC（stdio / HTTP） | 文件协议 + 命令行 |
+| 宿主门槛 | 支持 skill 的客户端 | 支持 MCP 的客户端 | 任何能跑命令的 agent |
+| 典型用途 | 传授判断力与流程 | 稳定、通用的工具（查库 / 发 HTTP / 读文件） | 项目内、随问题变化的探查能力 |
 
-- **它不是 MCP。** 现在走的是「文件协议 + 命令行」，agent 通过 shell 调用。
-  好处是**不挑宿主**——任何能跑命令的 agent 都能用，零集成成本。
-- **它也不是 skill。** skill 是"知识包"，本身不执行。本项目里 `AGENTS.md`/`docs` 是 skill 的素材，
-  但真正到现场的能力来自 `bridge.py`。
-- **它天然可以被包成 MCP。** 每个 `[BridgeAction]` 对应一个 MCP tool，
-  Unity 那边现成的 `list_actions` 就是 tool discovery。想加的话成本不高，
-  主要要处理「Unity 没开」和「agent 新加 action 后工具列表刷新」（`notifications/tools/list_changed`）两件事。
+### 为什么「agent 自己加 action」是本质差别
 
-**建议**：先用 CLI。需要塞进禁用 shell 的沙箱、或者想让工具直接出现在 agent 的工具列表里，再包 MCP。
+调试 bug 时要到达的状态**事先无法枚举** —— 你不可能预先把「某场战斗第 5 回合、带 2 层光环 buff、左边血量低于 30%」写成一个 MCP 工具。
+
+**MCP 的工具集是固化的**：想加一个工具，就得改 server 代码、重新部署、让客户端重连。而这里 agent 读完代码就能写一个方法，Unity 编译完能力就有了 —— **工具集是活的**。
+
+这也是为什么本项目里 `AGENTS.md` 花了大量篇幅讲「怎么加 action」而不是「有哪些 action」。
+
+### 那 MCP 什么时候更合适
+
+能力集**已知且稳定**、并且**跨项目复用**的场景：读数据库、发 HTTP、操作文件系统。
+这些正适合固化成工具。另外 MCP 不依赖 shell，在禁用命令行的沙箱里反而是唯一选择。
+
+### Skill 呢
+
+Skill 不执行任何东西，它的价值在传授**判断力**：什么时候该加 action、为什么不能模拟点击、
+卡住了先量 `frame` 而不是猜网络。本项目的 `AGENTS.md` + `docs/` 就是这部分 ——
+它是 skill 的现成素材，可以直接打包成一个 skill。
+
+**建议**：常态用 CLI；想把判断力交给 agent 就打成 skill；
+只有遇到「必须固化 + 跨项目复用 + 无 shell」的场景才上 MCP。
 
 ## 适合 / 不适合
 
@@ -165,7 +182,7 @@ python tools/bridge.py recipe run battle-100001-r5 --from 4     # 或只复用�
 - `PlayerSettings.runInBackground = true` **对编辑器播放循环无效**
 - `Application.isFocused` **不可靠**——失焦时它仍返回 `true`
 
-`play` 动作已内置自动抢焦点作为对策。完整分析见 [`docs/pitfalls.md`](docs/pitfalls.md)。
+`play` 动作已内置自动抢焦点作为对策。完整分析见 [`docs/pitfalls.md`](docs/pitfalls.zh-CN.md)。
 
 ## 目录结构
 
@@ -173,8 +190,9 @@ python tools/bridge.py recipe run battle-100001-r5 --from 4     # 或只复用�
 unity-agent-bridge/
 ├── README.md                       # 英文版（开源默认）
 ├── README.zh-CN.md                 # 你正在看的（人类部分 + agent 部分）
-├── AGENTS.md                       # ⭐ 交给 AI agent 的完整规则
-├── docs/
+├── AGENTS.md                       # ⭐ 交给 AI agent 的完整规则（英文）
+├── AGENTS.zh-CN.md                 # 同上，中文版
+├── docs/                           # 每篇都有 xxx.md（英文）+ xxx.zh-CN.md（中文）
 │   ├── architecture.md             文件协议、分发机制、与 batchmode 的关系
 │   ├── adding-actions.md           ⭐ 怎么动态加 action
 │   ├── recipes.md                  链路保存与复用
@@ -187,6 +205,9 @@ unity-agent-bridge/
     ├── bridge.py                   命令行驱动
     └── recipes/                    链路库
 ```
+
+> **关于语言**：文档约定与 GitHub 惯例一致 —— 主名放英文，中文加 `.zh-CN.md` 后缀。
+> 每篇文档标题下都有一行切换链接。
 
 ## 常见问题
 
@@ -209,7 +230,7 @@ unity-agent-bridge/
 
 # 给 AI agent
 
-> 完整规则见 [`AGENTS.md`](AGENTS.md)。这里是精简版，够你开工。
+> 完整规则见 [`AGENTS.md`](AGENTS.zh-CN.md)。这里是精简版，够你开工。
 
 ## 硬性规则
 
@@ -278,7 +299,7 @@ python tools/bridge.py recipe run my-flow --from 3     # 只复用后半段
 ```
 
 保存后手工补两样（自动生成给不了）：**`wait`/`expect` 等待条件**、**seed 固定随机**。
-写法见 [`docs/recipes.md`](docs/recipes.md)。
+写法见 [`docs/recipes.md`](docs/recipes.zh-CN.md)。
 
 > ⚠️ **recipe 是私有资产**，里面有账号、服务器 ID、业务流程 —— **不要提交到公开仓库**。
 
