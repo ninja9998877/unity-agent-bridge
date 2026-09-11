@@ -98,6 +98,35 @@ check automatically when a command times out.
 
 > Windows-only (Win32 `EnumWindows` + `BM_CLICK`).
 
+### Where the dialog actually comes from
+
+Don't assume it's a Unity built-in. **Grep your own project first:**
+
+```bash
+grep -rn "DisplayDialog\|SaveCurrentModifiedScenesIfUserWantsTo\|SaveOpenScenes" Assets/
+```
+
+Projects commonly add their own "Save Changes?" prompt in a play-mode hook — which then fires on
+**every** play, and blocks your automation every time. The fix there is not to remove it (humans
+want it) but to give it a skip switch that the driver sets before entering Play mode.
+
+### You cannot clear the scene dirty flag
+
+Tempting idea: just reset `Scene.isDirty` before playing, so the prompt never appears.
+**It doesn't exist.** Verified by reflecting over the API on Unity 2020.3:
+
+| | result |
+|---|---|
+| `Scene.isDirty` | **getter only** — no setter, not even internal |
+| `Scene.GetIsDirtyInternal` | static, **non-public**, read only |
+| `EditorSceneManager` | `MarkSceneDirty` / `MarkAllScenesDirty` — **setting only** |
+
+So there is no "un-dirty" API; the only ways are saving or reloading the scene. **Prefer a skip
+switch over trying to clear the flag** — and probe before you guess:
+
+> **Don't guess at an API's shape from memory. Reflect over it and print the real members.**
+> A 20-line probe action changed this from "try things until it compiles" into a definite answer.
+
 **The general rule: if nothing has responded for over a minute, look at the screen** instead of
 continuing to wait.
 

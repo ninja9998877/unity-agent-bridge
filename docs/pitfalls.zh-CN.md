@@ -95,6 +95,34 @@ python tools/bridge.py unblock
 > 仅 Windows（用 Win32 `EnumWindows` + `BM_CLICK`）。脚本文件必须存成 **UTF-8 with BOM**，
 > 否则 PowerShell 5.1 按 ANSI 读会乱码报错。
 
+### 这个框到底是谁弹的
+
+**别默认是 Unity 内置的，先 grep 自己的工程：**
+
+```bash
+grep -rn "DisplayDialog\|SaveCurrentModifiedScenesIfUserWantsTo\|SaveOpenScenes" Assets/
+```
+
+工程里很常见有人自己在播放模式钩子里加了个「Save Changes?」提示 —— 于是**每次**播放都弹，
+每次都把你的自动化卡死。这种地方的修法**不是删掉它**（人要用的），
+而是给它一个跳过开关，由驱动方在进播放模式前置位。
+
+### 场景脏标记是**清不掉**的
+
+很容易想到："那我在播放前把 `Scene.isDirty` 重置掉，不就永远不弹了？"
+**没有这个 API。** 在 Unity 2020.3 上用反射把真实成员打出来验证过：
+
+| | 结论 |
+|---|---|
+| `Scene.isDirty` | **只有 getter** —— 没有 setter，连 internal 的都没有 |
+| `Scene.GetIsDirtyInternal` | static、**非 public**，且只读 |
+| `EditorSceneManager` | 只有 `MarkSceneDirty` / `MarkAllScenesDirty` —— **只能置脏，不能清** |
+
+所以只能靠"保存"或"重新加载场景"来清，别在这上面浪费时间。**优先用跳过开关，而不是想办法清脏。**
+
+> **不要凭记忆猜 API 长什么样 —— 反射打出来看真实成员。**
+> 一个 20 行的探针 action 就把「试到能编译为止」变成了确定答案。
+
 **通用规则：超过一分钟没有任何反馈，就去看屏幕，不要接着等。**
 
 ---
