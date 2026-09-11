@@ -156,6 +156,10 @@ for file-by-file search.
 With it installed, the agent's step ① ("read the code to find the path") goes from paging through
 files to one graph query — and the savings are all tokens and wall-clock.
 
+> This is only a **recommendation**. If you've handed `AGENTS.md` to your agent, it's been told to
+> raise this with you when it's relevant — **the decision to install is yours.** It shouldn't
+> install anything on its own, and it shouldn't stall waiting for it.
+
 ---
 
 ## What is this, exactly? (Skill / MCP / this tool)

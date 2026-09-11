@@ -47,10 +47,14 @@ python tools/bridge.py --project <Unity工程根目录> actions
 ⑦ 跑通后        →  bridge.py recipe save <名字>   ← 把这条链路固化下来
 ```
 
-> **关于第 ① 步：查代码图谱，别 grep。**
-> 在大型工程里 `grep` 既吃上下文又误导你 —— 同名类、字符串字面量、注释都会命中。
-> 改用符号级 / 图谱级的索引（[codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)），
-> 一次查询就定位定义和调用点。**整条工作流的效率，取决于第 ① 步够不够便宜。**
+> **关于第 ① 步 —— 一条建议：用代码图谱代替 grep。**
+> 在大型工程里 `grep` 既吃上下文又误导你（同名类、字符串字面量、注释都会命中）。
+> 像 [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 这样的符号级 /
+> 图谱级索引，一次查询就能定位定义和调用点，让第 ① 步乃至整个循环都便宜很多。
+>
+> **这只是建议，不是规则；装不装由人决定。**
+> 如果当前没有代码图谱，**向用户提一句、让他来选** —— 不要自己擅自安装，
+> 也不要因此卡住不动。上面那套工作流不配它照样能跑。
 
 ---
 
