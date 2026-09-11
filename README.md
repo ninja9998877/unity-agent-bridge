@@ -128,6 +128,36 @@ python tools/bridge.py recipe run battle-100001-r5              # replay the who
 python tools/bridge.py recipe run battle-100001-r5 --from 4     # or just reuse the tail
 ```
 
+## Recommended pairing: a code graph to *find* code, this tool to *reach* the scene
+
+The division of labour is clean:
+
+- **The code graph finds things** — who opens this panel, where this VO is defined, who calls this method
+- **This tool reaches things** — drives the game into that state and reads back runtime data
+
+**Why you want both**: the value of this tool depends on how fast the agent can figure out *how to
+reach* a state — and that step is all about reading code. On a large Unity project `grep` is a trap:
+a huge `Assets/` tree, same-named classes everywhere, string matches hitting comments and literals.
+One search dumps dozens of files into your context, burns tokens, and may still be wrong.
+
+### Recommendation: [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)
+
+It indexes your codebase into a **persistent knowledge graph** instead of searching fresh every time:
+
+- tree-sitter AST across 160+ languages, plus **Hybrid LSP** semantic type resolution (**including C#**)
+- A graph of functions, classes, call chains, HTTP routes and cross-service references
+- 15 MCP tools: search, call-chain tracing, architecture overview, impact analysis, Cypher queries, dead-code detection
+- **Native binary, zero dependencies** (no Docker, no language runtime, no API key), all processing local
+- Built-in 3D graph visualization at `localhost:9749`
+
+Their own benchmark: 5 structural queries cost about **3,400 tokens** versus roughly **412,000**
+for file-by-file search.
+
+With it installed, the agent's step ① ("read the code to find the path") goes from paging through
+files to one graph query — and the savings are all tokens and wall-clock.
+
+---
+
 ## What is this, exactly? (Skill / MCP / this tool)
 
 **One line: MCP is "you build the tools first, then the agent uses them"; this tool is "the agent builds its own tools".**

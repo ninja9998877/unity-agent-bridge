@@ -47,6 +47,11 @@ python tools/bridge.py --project <Unity工程根目录> actions
 ⑦ 跑通后        →  bridge.py recipe save <名字>   ← 把这条链路固化下来
 ```
 
+> **关于第 ① 步：查代码图谱，别 grep。**
+> 在大型工程里 `grep` 既吃上下文又误导你 —— 同名类、字符串字面量、注释都会命中。
+> 改用符号级 / 图谱级的索引（[codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)），
+> 一次查询就定位定义和调用点。**整条工作流的效率，取决于第 ① 步够不够便宜。**
+
 ---
 
 ## 3. 怎么动态加一个 action

@@ -50,6 +50,12 @@ Consider setting `AGENTBRIDGE_PROJECT` so you can drop `--project`.
 ⑦ Chain works    → bridge.py recipe save <name>     ← freeze it before you lose it
 ```
 
+> **On step ①: query a code graph, don't grep.**
+> On a large codebase `grep` both burns your context and misleads you — same-named classes, string
+> literals and comments all match. Use a symbol/graph-level index instead
+> ([codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)) to locate definitions
+> and call sites in one query. **The whole workflow's efficiency depends on step ① being cheap.**
+
 ---
 
 ## 3. How to add an action on the fly
