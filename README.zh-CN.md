@@ -135,7 +135,7 @@ python tools/bridge.py send ping
 
 # 编译完后驱动：
 python tools/bridge.py compile                             # 必须先过，否则驱动到的是旧代码
-python tools/bridge.py session clear                       # 开始记录
+python tools/bridge.py session clear                       # 开始记录（含返回值摘要）
 python tools/bridge.py send play
 python tools/bridge.py send login --arg account=test01 --arg password=xxx
 python tools/bridge.py send select_server --arg serverId=1001
@@ -390,6 +390,13 @@ python tools/bridge.py session clear                   # 开始前清一次
 python tools/bridge.py recipe save my-flow             # 跑通后固化
 python tools/bridge.py recipe run my-flow              # 整条回放
 python tools/bridge.py recipe run my-flow --from 3     # 只复用后半段
+```
+
+排查时这两条最省事（session 会记下每步的返回值摘要与耗时）：
+
+```bash
+python tools/bridge.py session tail -n 20              # 最近 20 步 + 返回值摘要 + error
+python tools/bridge.py session stats                   # 按 action 汇总：次数 / 失败 / 平均耗时
 ```
 
 保存后手工补两样（自动生成给不了）：**`wait`/`expect` 等待条件**、**seed 固定随机**。

@@ -143,6 +143,25 @@ def dig(obj, path):
 # 桥接客户端
 # ─────────────────────────────────────────────────────────────────────
 
+SESSION_TEXT_LIMIT = 500          # session 里单个文本字段保留的最大字符数
+
+
+def summarize_result(result):
+    """把返回结果压成一个可落盘的短摘要（None 表示没有内容可记）。"""
+    if not result:
+        return None
+    state = result.get("state")
+    if state is None:
+        return None
+    try:
+        text = json.dumps(state, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = str(state)
+    if len(text) > SESSION_TEXT_LIMIT:
+        text = text[:SESSION_TEXT_LIMIT] + "...(truncated)"
+    return text
+
+
 class Bridge(object):
     def __init__(self, project, prefix, timeout):
         self.project = os.path.abspath(project)
@@ -161,6 +180,7 @@ class Bridge(object):
     def send(self, action, args=None, timeout=None, record=True, quiet=False):
         """发一条指令并等结果。返回结果 dict；超时返回 None。"""
         timeout = timeout if timeout is not None else self.timeout
+        _t0 = time.time()
 
         # 清掉上一轮结果，避免读到陈旧数据
         if os.path.exists(self.result_path):
@@ -178,10 +198,22 @@ class Bridge(object):
             if os.path.exists(self.result_path):
                 try:
                     with open(self.result_path, "r", encoding="utf-8") as f:
-                        result = json.load(f)
-                    break
+                        data = json.load(f)
                 except (ValueError, OSError):
-                    pass          # 还没写完，下一轮再读
+                    data = None      # 还没写完，下一轮再读
+                if data is not None:
+                    # ⚠ 必须校验 action：只等文件出现是不够的。
+                    #   两个进程共用同一 prefix、或上一次超时后 Unity 才写回结果时，
+                    #   会把别人的结果当成自己的（实测：请求 ping 却收到别的 action 的数据）。
+                    #   不匹配就当陈旧结果丢弃，继续等自己那条。
+                    got_action = data.get("action")
+                    if got_action is None or got_action == action:
+                        result = data
+                        break
+                    try:
+                        os.remove(self.result_path)
+                    except OSError:
+                        pass
             time.sleep(0.2)
 
         if result is None:
@@ -199,17 +231,37 @@ class Bridge(object):
             return None
 
         if record:
-            self._record(action, args or {}, result)
+            self._record(action, args or {}, result, elapsed=time.time() - _t0)
         return result
 
-    def _record(self, action, args, result):
-        """把每一步落进 session 日志 —— recipe save 就是从它生成"""
+    def _record(self, action, args, result, elapsed=None):
+        """把每一步落进 session 日志 —— recipe save 就是从它生成。
+
+        除 ok 外还记 result 摘要与 error：只记「发了什么、成没成」不够用——
+        复盘时最常问的是「上次这步到底返回了什么」，没有它只能重跑一遍。
+        result 会截断，避免 session 文件被大对象撑爆。
+        """
+        # ⚠ ok 有两种来源：桥本身拒发/超时是外层 ok=false；
+        #   而 action 内部失败（如 probe 找不到成员）是 state.ok=false、外层仍 ok=true。
+        #   只看外层会把「调用成功但执行失败」记成成功，stats 与 recipe save 都会失真。
+        state = result.get("state")
+        state_ok = state.get("ok") if isinstance(state, dict) else None
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "action": action,
             "args": args,
-            "ok": bool(result.get("ok")),
+            "ok": bool(result.get("ok")) and state_ok is not False,
         }
+        if elapsed is not None:
+            entry["elapsed"] = round(elapsed, 3)
+        summary = summarize_result(result)
+        if summary is not None:
+            entry["result"] = summary
+        err = result.get("error")
+        if not err and isinstance(state, dict):
+            err = state.get("error")
+        if err:
+            entry["error"] = str(err)[:SESSION_TEXT_LIMIT]
         try:
             with open(self.session_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -376,6 +428,50 @@ def cmd_recipe_run(bridge, args):
         info("结束：%d 步失败" % failed)
         return 1
     info("结束：全部成功 ✓")
+    return 0
+
+
+def session_stats(bridge):
+    """按 action 汇总：调用次数、失败数、平均耗时 —— 快速看出哪步最费时/最不稳"""
+    rows = bridge.session()
+    if not rows:
+        info("session 里还没有记录")
+        return 0
+    agg = {}
+    for e in rows:
+        a = e.get("action", "?")
+        d = agg.setdefault(a, {"n": 0, "fail": 0, "t": 0.0, "tn": 0})
+        d["n"] += 1
+        if not e.get("ok"):
+            d["fail"] += 1
+        if isinstance(e.get("elapsed"), (int, float)):
+            d["t"] += e["elapsed"]
+            d["tn"] += 1
+    print("%-28s %6s %6s %10s" % ("action", "count", "fail", "avg(s)"))
+    for a, d in sorted(agg.items(), key=lambda kv: (-kv[1]["fail"], -kv[1]["n"])):
+        avg = ("%.2f" % (d["t"] / d["tn"])) if d["tn"] else "-"
+        print("%-28s %6d %6d %10s" % (a, d["n"], d["fail"], avg))
+    total = len(rows)
+    failed = sum(1 for e in rows if not e.get("ok"))
+    print("\n合计 %d 步，失败 %d 步" % (total, failed))
+    return 0
+
+
+def session_tail(bridge, n=10):
+    """看最近 n 步，带返回值摘要 —— 比 session show 更适合事后排查"""
+    rows = bridge.session()[-n:]
+    if not rows:
+        info("session 里还没有记录")
+        return 0
+    for e in rows:
+        head = "%s %-9s %-22s" % (e.get("ts", ""), "ok" if e.get("ok") else "FAIL", e.get("action"))
+        if e.get("args"):
+            head += " " + json.dumps(e["args"], ensure_ascii=False)
+        print(head)
+        if e.get("error"):
+            print("    error: " + str(e["error"]))
+        if e.get("result"):
+            print("    -> " + str(e["result"]))
     return 0
 
 
@@ -638,6 +734,9 @@ def build_parser():
         dest="session_cmd", required=True)
     ses.add_parser("show", help="显示已记录的步骤")
     ses.add_parser("clear", help="清空记录（建议开始一轮新复现前清一次）")
+    ses.add_parser("stats", help="按 action 汇总调用次数 / 失败数 / 耗时")
+    st = ses.add_parser("tail", help="只看最近 N 步（含返回值摘要）")
+    st.add_argument("-n", type=int, default=10)
 
     lg = sub.add_parser("log", help="看 Unity 编辑器日志尾部")
     lg.add_argument("--tail", type=int, default=60)
@@ -737,6 +836,10 @@ def main():
         if args.session_cmd == "clear":
             bridge.clear_session()
             print("已清空 session 记录")
+        elif args.session_cmd == "stats":
+            return session_stats(bridge)
+        elif args.session_cmd == "tail":
+            return session_tail(bridge, args.n)
         else:
             for i, e in enumerate(bridge.session(), 1):
                 print("%2d. %-9s %-24s %s" % (

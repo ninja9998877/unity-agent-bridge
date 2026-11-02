@@ -140,7 +140,7 @@ Say you need to reproduce "buffs render wrong on round 5 of battle X":
 # Once compiled, it drives the game:
 
 python tools/bridge.py compile                             # MUST pass before driving
-python tools/bridge.py session clear                       # start recording
+python tools/bridge.py session clear                       # start recording (keeps result summaries)
 python tools/bridge.py send play
 python tools/bridge.py send login --arg account=test01 --arg password=xxx
 python tools/bridge.py send select_server --arg serverId=1001
@@ -410,6 +410,14 @@ python tools/bridge.py session clear                   # clear before starting
 python tools/bridge.py recipe save my-flow             # freeze it once it works
 python tools/bridge.py recipe run my-flow              # replay the whole thing
 python tools/bridge.py recipe run my-flow --from 3     # or reuse only the tail
+```
+
+Two commands that pay off most when debugging (the session log keeps each
+step's result summary and elapsed time):
+
+```bash
+python tools/bridge.py session tail -n 20              # last 20 steps + result summary + error
+python tools/bridge.py session stats                   # per action: count / failures / avg time
 ```
 
 After saving, hand-edit two things the generator can't produce:

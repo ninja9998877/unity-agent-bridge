@@ -264,3 +264,29 @@ python tools/bridge.py log --tail 50 --grep "你的 TAG"
 报错信息很长，容易误判成"Unity 坏了"。
 
 **对策**：跑 batchmode（编译校验 / EditMode 测试）前先确认编辑器已关。
+
+---
+
+## 11. 同一个 prefix 被两个进程共用 → 读到别人的结果
+
+桥是「写指令文件 → 轮询结果文件」，**没有请求 ID**。两个 agent 同时用同一个
+`--prefix`，或上一次超时后 Unity 才把结果写回来，就可能把别人的结果当成自己的。
+实测现象：请求 `ping`，回来的却是另一个 action 的数据。
+
+**对策（bridge.py 已内置第一层）**：收到结果时校验 `action` 是否是自己发的，
+不匹配就当陈旧结果丢弃、继续等。
+
+**仍建议**：多个 agent / 多个会话并行时，各自用不同 `--prefix`（例如
+`--prefix a1`、`--prefix b2`），从源头上隔开。
+
+---
+
+## 12. session 记录里的「成功」不一定是真成功
+
+`result.ok`（外层）只表示「指令送达并执行完」。action 内部失败时，是
+`state.ok = false`，外层仍然是 `true`。只看外层会把这类失败记成成功。
+
+**对策（已内置）**：`_record` 同时看 `state.ok` 和 `state.error`，
+`session stats` 的失败数、`recipe save` 的筛选都基于合并后的结果。
+你自己写的 action 请保持「失败时返回 `{ ok: false, error: "..." }`」这一约定，
+否则上层无从判断。
