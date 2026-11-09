@@ -320,6 +320,12 @@ two JSON files — any language works, even `echo`.
 **Can it coexist with other tools/agents?**
 Yes. Use `--prefix` (or `AGENTBRIDGE_PREFIX`) to isolate each one's command files.
 
+> ⚠️ **A prefix mismatch shows up as "Unity is not responding (timeout)"**, which is easy
+> to misdiagnose as a modal dialog or a lost focus. `bridge.py` defaults to
+> `--prefix agentbridge`; if the bridge in your project (e.g. `TestBridge.cs`) hard-codes
+> `testbridge`, you must pass `--prefix testbridge` explicitly — otherwise the two sides
+> read and write different files. Check the actual filenames under `Temp/` first.
+
 **Will my project-specific actions end up in this repo?**
 No. `BridgeActions.cs` holds generic capabilities only. Put project-specific ones in a separate
 file (same `[BridgeAction]` attribute, auto-discovered), so the two can evolve independently.

@@ -302,6 +302,11 @@ unity-agent-bridge/
 **Q：能跟别的工具/agent 并存吗？**
 能。`--prefix`（或环境变量 `AGENTBRIDGE_PREFIX`）隔离各自的指令文件。
 
+> ⚠️ **prefix 对不上时表现为「Unity 没响应（超时）」**，很容易被误判成弹窗/失焦。
+> `bridge.py` 默认 `--prefix agentbridge`；如果你项目里的桥（比如 `TestBridge.cs`）
+> 写死了 `testbridge`，就必须显式带 `--prefix testbridge`，否则两边读写的是不同文件。
+> 先看 `Temp/` 下真实的文件名再定 prefix。
+
 **Q：项目专有的 action 会进这个仓库吗？**
 不会。`BridgeActions.cs` 只放通用能力，项目专属请另建文件（同样打 `[BridgeAction]` 就会被发现），
 这样两边能各自独立升级。
