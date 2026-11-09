@@ -98,12 +98,80 @@ def editor_log_path():
     return os.path.expanduser("~/.config/unity3d/Editor.log")
 
 
+# 轮询退避参数。
+#
+# 为什么不是固定值：Unity 侧收到指令后写结果通常只要几十毫秒，
+# 固定 0.2s 意味着**每次调用都白等** 0.1~0.2s。探查时连发十条就是一秒多的纯浪费。
+# 先密后疏：10ms 起，翻倍到 100ms 封顶 —— 快的那几轮几乎零成本，
+# 慢的时候也不会把 CPU 打满（探查链路动辄要等几秒）。
+POLL_MIN = 0.01
+POLL_MAX = 0.10
+
+# wait_for 轮询的是**游戏状态**（可能导致下一帧才变），比桥本身慢，
+# 所以起点高一些，封顶也高一些，避免把 Unity 打得太频繁。
+POLL_WAIT_MIN = 0.10
+POLL_WAIT_MAX = 0.50
+
+# 编译日志落盘的等待上限。以前是固定 sleep 2.0s。
+LOG_FLUSH_MAX = 3.0
+
+
+def poll_sleep(delay, lo=POLL_MIN, hi=POLL_MAX):
+    """睡 delay 秒，返回下一次该睡多久（翻倍，封顶 hi）。"""
+    time.sleep(delay)
+    return min(delay * 2, hi)
+
+
+def next_poll_delay(delay, lo=POLL_MIN, hi=POLL_MAX):
+    """只算下一次的间隔（不睡）—— 便于单测。"""
+    return min(delay * 2, hi)
+
+
+def wait_for_log_signal(log, mark, budget=LOG_FLUSH_MAX):
+    """等日志在 mark 之后出现编译相关的新内容，最多等 budget 秒。
+
+    返回新日志文本（可能为空）。编译成功时调用方根本不需要它，
+    所以这个函数只在「需要看日志」的路径上跑，成功路径 0 等待。
+    """
+    deadline = time.time() + budget
+    text = ""
+    while True:
+        text = _new_log_text(log, mark)
+        if text and ("script compilation" in text or "error CS" in text):
+            return text
+        if time.time() >= deadline:
+            return text
+        time.sleep(POLL_MIN)
+
+
 def write_atomic(path, text):
     """先写临时文件再替换，避免 Unity 读到写了一半的指令"""
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, path)
+
+
+# 全局开关：--json 时 stdout 只吐一个 JSON 对象，方便程序解析。
+# 用模块级变量而不是到处传参 —— 输出点太多，逐个透传反而更容易漏。
+JSON_OUT = False
+
+
+def emit_json(payload):
+    """--json 模式下的唯一输出口。"""
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def out(payload, text_fn):
+    """二选一：--json 输出结构体，否则调 text_fn 打印给人看。
+
+    text_fn 只在非 json 模式下执行，所以里面的 print 不用关心 json 模式。
+    """
+    if JSON_OUT:
+        emit_json(payload)
+    else:
+        text_fn()
+    return 0
 
 
 def parse_arg_pairs(pairs):
@@ -292,6 +360,11 @@ def annotate(result):
 
 SESSION_TEXT_LIMIT = 500          # session 里单个文本字段保留的最大字符数
 
+# session 文件上限。探查时每条指令都记一行，跑一天几万行很正常；
+# session() 是**全量读进内存**的，不限的话 stats/show 会越来越慢、越来越吃内存。
+# 超过上限时把当前文件轮转成 .1，只保留一代 —— 够回溯最近的工作，又不会无限涨。
+SESSION_MAX_BYTES = 8 * 1024 * 1024
+
 
 def summarize_result(result):
     """把返回结果压成一个可落盘的短摘要（None 表示没有内容可记）。"""
@@ -318,6 +391,9 @@ class Bridge(object):
         self.cmd_path = os.path.join(self.temp, prefix + "_cmd.json")
         self.result_path = os.path.join(self.temp, prefix + "_result.json")
         self.session_path = os.path.join(self.temp, prefix + "_session.jsonl")
+        # 请求序号：同名 action 连发时用来区分「这是哪一次的返回」。
+        # 不依赖时钟（Windows 时间戳精度和回拨都可能出问题），纯递增。
+        self._seq = 0
 
         if not os.path.isdir(self.temp):
             die("找不到 %s —— --project 指向的是 Unity 工程根目录吗？" % self.temp,
@@ -337,11 +413,14 @@ class Bridge(object):
             except OSError:
                 pass
 
+        self._seq += 1
+        seq = self._seq
         write_atomic(self.cmd_path, json.dumps(
-            {"action": action, "args": args or {}}, ensure_ascii=False))
+            {"action": action, "args": args or {}, "seq": seq}, ensure_ascii=False))
 
         deadline = time.time() + timeout
         result = None
+        delay = POLL_MIN
         while time.time() < deadline:
             if os.path.exists(self.result_path):
                 try:
@@ -355,14 +434,25 @@ class Bridge(object):
                     #   会把别人的结果当成自己的（实测：请求 ping 却收到别的 action 的数据）。
                     #   不匹配就当陈旧结果丢弃，继续等自己那条。
                     got_action = data.get("action")
-                    if got_action is None or got_action == action:
+                    got_seq = data.get("seq")
+                    # 新桥会回显 seq：有就精确比较，同名 action 连发也能分清。
+                    # 旧桥不回显 seq（got_seq is None）→ 退回按 action 名比较；
+                    # 那种情况下同名连发仍可能串，属于已知限制（见 pitfalls 第 11 条）。
+                    if got_seq is not None:
+                        matched = (got_seq == seq)
+                    else:
+                        # 旧桥不回显 seq。它若是 Unity 收到指令后**重启**才留下的结果，
+                        # 里面的 seq 其实是从我们发出的 cmd 文件里照抄的，正好等于本次
+                        # seq —— 被误认成自己的。所以 action 名对不上就坚决丢弃。
+                        matched = (got_action == action)
+                    if matched:
                         result = data
                         break
                     try:
                         os.remove(self.result_path)
                     except OSError:
                         pass
-            time.sleep(0.2)
+            delay = poll_sleep(delay)
 
         if result is None:
             if not quiet:
@@ -411,9 +501,25 @@ class Bridge(object):
             entry["error"] = str(err)[:SESSION_TEXT_LIMIT]
         if result.get("code"):
             entry["code"] = result["code"]
+        self._rotate_session_if_needed()
         try:
             with open(self.session_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    def _rotate_session_if_needed(self):
+        """超过上限就把当前 session 轮转成 .1（只留一代）。"""
+        try:
+            if os.path.getsize(self.session_path) < SESSION_MAX_BYTES:
+                return
+        except OSError:
+            return
+        rotated = self.session_path + ".1"
+        try:
+            if os.path.exists(rotated):
+                os.remove(rotated)
+            os.replace(self.session_path, rotated)
         except OSError:
             pass
 
@@ -441,13 +547,14 @@ class Bridge(object):
         """反复调 poll_action，直到 dig(result, path) == equals"""
         deadline = time.time() + timeout
         last = None
+        delay = POLL_WAIT_MIN
         while time.time() < deadline:
             last = self.send(poll_action, poll_args, record=False, quiet=True)
             if last is not None:
                 got = dig(last, path)
                 if got is not None and str(got) == str(equals):
                     return True, last
-            time.sleep(1.0)
+            delay = poll_sleep(delay, POLL_WAIT_MIN, POLL_WAIT_MAX)
         return False, last
 
 
@@ -580,11 +687,187 @@ def cmd_recipe_run(bridge, args):
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 子命令分发
+#
+# 以前 main() 是一串 if args.cmd == "x"，130 行，加命令容易漏改分支。
+# 现在每条命令登记成「名字 → (处理函数, 是否需要工程目录)」，
+# main() 只管前置检查、分发和退出码。
+# ─────────────────────────────────────────────────────────────────────
+
+def cmd_actions(bridge, args):
+    result = bridge.send("list_actions")
+    if result is None:
+        die("Unity 没响应。确认编辑器已打开、AgentBridge.cs 已编译（看 Console 里有没有 "
+            "[AgentBridge] 已就绪）", error_code="ZB-BRIDGE-001")
+    if not result.get("ok"):
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 1
+    actions = result["state"]["actions"]
+    if JSON_OUT:
+        emit_json({"ok": True, "count": len(actions), "actions": actions})
+        return 0
+    for n in actions:
+        print(n)
+    return 0
+
+
+def cmd_send(bridge, args):
+    if not args.no_guard:
+        blocked = guard_before_drive(bridge)
+        if blocked:
+            die(blocked, error_code="ZB-BRIDGE-002")
+    result = bridge.send(args.action, parse_arg_pairs(args.arg), timeout=args.timeout)
+    if result is None:
+        die("超时，没收到结果", error_code="ZB-BRIDGE-001")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result.get("ok"):
+        code = result.get("code")
+        title, hint = code_help(code) if code else (None, None)
+        if title:
+            info("失败原因 [%s] %s" % (code, title))
+        if hint:
+            info("  -> " + hint)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_compile(bridge, args):
+    r = compile_check(bridge, timeout=args.timeout, log_path=args.log)
+    if JSON_OUT:
+        emit_json({"ok": bool(r["ok"]), **r})
+    if not r["ok"]:
+        print("编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，"
+              "此时驱动得到的是旧代码的结果。", file=sys.stderr)
+        for e in r["errors"]:
+            print("  " + e, file=sys.stderr)
+        if not r["errors"]:
+            print("  （没能从日志提取到 error CS 行，请直接看 Editor.log）", file=sys.stderr)
+        return 1
+    if r.get("playing"):
+        print("编译通过，但**当前在播放模式** ⚠️", file=sys.stderr)
+        print("  新编译出来的程序集不会换到正在运行的代码上，"
+              "此时驱动到的仍是旧代码。先 `send stop` 再驱动。", file=sys.stderr)
+        return 3
+    notes = []
+    if r["compiled"] is False:
+        notes.append("未检测到新的编译发生（源码没变？或刷新没生效）")
+    if r["triggered"] is False:
+        notes.append("⚠️ 桥不支持 refresh，无法主动触发编译，请先聚焦编辑器")
+    print("编译通过 ✓" + ("　·　" + "；".join(notes) if notes else ""))
+    return 0
+
+
+def cmd_wait(bridge, args):
+    ok, last = bridge.wait_for(args.action, parse_arg_pairs(args.arg),
+                               args.path, args.equals, args.timeout)
+    if JSON_OUT:
+        emit_json({"ok": bool(ok), "last": last})
+        return 0 if ok else 1
+    print(json.dumps(last, ensure_ascii=False, indent=2) if last else "(无结果)")
+    return 0 if ok else 1
+
+
+def cmd_session(bridge, args):
+    if args.session_cmd == "clear":
+        bridge.clear_session()
+        if JSON_OUT:
+            emit_json({"ok": True, "cleared": True})
+        else:
+            print("已清空 session 记录")
+    elif args.session_cmd == "stats":
+        return session_stats(bridge)
+    elif args.session_cmd == "tail":
+        return session_tail(bridge, args.n)
+    elif JSON_OUT:
+        emit_json({"ok": True, "steps": bridge.session()})
+    else:
+        for i, e in enumerate(bridge.session(), 1):
+            print("%2d. %-9s %-24s %s" % (
+                i, "ok" if e.get("ok") else "FAIL",
+                e["action"], json.dumps(e.get("args") or {}, ensure_ascii=False)))
+    return 0
+
+
+def cmd_explain(_bridge, args):
+    """纯本地命令：不需要 Unity，也不该要求 --project。"""
+    if args.code:
+        code = args.code.upper()
+        title, hint = code_help(code)
+        if not title:
+            die("没有这个错误码: %s（用 `explain` 不带参数列出全部）" % code,
+                error_code="ZB-CLI-007")
+        if JSON_OUT:
+            emit_json({"ok": True, "code": code, "title": title, "hint": hint})
+        else:
+            print("%s  %s" % (code, title))
+            if hint:
+                print("  " + hint)
+    elif JSON_OUT:
+        emit_json({"ok": True, "codes": [
+            {"code": c, "title": ERROR_CODES[c][0], "hint": ERROR_CODES[c][1]}
+            for c in sorted(ERROR_CODES)]})
+    else:
+        for c in sorted(ERROR_CODES):
+            title, _hint = ERROR_CODES[c]
+            print("%-14s %s" % (c, title))
+    return 0
+
+
+def cmd_log(_bridge, args):
+    path = args.path or editor_log_path()
+    if not os.path.isfile(path):
+        die("找不到日志: %s（用 --path 指定）" % path, error_code="ZB-CLI-006")
+    pat = re.compile(args.grep) if args.grep else None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    if pat:
+        lines = [l for l in lines if pat.search(l)]
+    tail = lines[-args.tail:]
+    if JSON_OUT:
+        emit_json({"ok": True, "path": path, "lines": tail})
+    else:
+        sys.stdout.write("".join(tail))
+    return 0
+
+
+def cmd_unblock(_bridge, args):
+    if not sys.platform.startswith("win"):
+        die("unblock 目前只实现了 Windows（macOS/Linux 需要人工点掉对话框）",
+            error_code="ZB-CLI-007")
+    out_text = dismiss_unity_modal()
+    if out_text is None:
+        die("找不到 dismiss_unity_modal.ps1，或 PowerShell 执行失败",
+            error_code="ZB-CLI-007")
+    ok = '"ok":true' in out_text or '"ok": true' in out_text
+    if JSON_OUT:
+        emit_json({"ok": ok, "raw": out_text})
+    else:
+        print(out_text)
+    return 0 if ok else 1
+
+
+# 名字 → (处理函数, 是否需要 Unity 工程目录)
+COMMANDS = {
+    "actions": (cmd_actions, True),
+    "send": (cmd_send, True),
+    "compile": (cmd_compile, True),
+    "wait": (cmd_wait, True),
+    "recipe": (None, True),          # recipe 有自己的二级分发，见 main()
+    "session": (cmd_session, True),
+    "log": (cmd_log, False),         # 只读 Editor.log，不需要桥
+    "unblock": (cmd_unblock, False), # 只点对话框
+    "explain": (cmd_explain, False), # 纯本地
+}
+
+
 def session_stats(bridge):
     """按 action 汇总：调用次数、失败数、平均耗时 —— 快速看出哪步最费时/最不稳"""
     rows = bridge.session()
     if not rows:
-        info("session 里还没有记录")
+        if JSON_OUT:
+            emit_json({"ok": True, "total": 0, "failed": 0, "actions": []})
+        else:
+            info("session 里还没有记录")
         return 0
     agg = {}
     for e in rows:
@@ -596,12 +879,24 @@ def session_stats(bridge):
         if isinstance(e.get("elapsed"), (int, float)):
             d["t"] += e["elapsed"]
             d["tn"] += 1
-    print("%-28s %6s %6s %10s" % ("action", "count", "fail", "avg(s)"))
-    for a, d in sorted(agg.items(), key=lambda kv: (-kv[1]["fail"], -kv[1]["n"])):
-        avg = ("%.2f" % (d["t"] / d["tn"])) if d["tn"] else "-"
-        print("%-28s %6d %6d %10s" % (a, d["n"], d["fail"], avg))
+    ordered = sorted(agg.items(), key=lambda kv: (-kv[1]["fail"], -kv[1]["n"]))
     total = len(rows)
     failed = sum(1 for e in rows if not e.get("ok"))
+    if JSON_OUT:
+        emit_json({
+            "ok": True,
+            "total": total,
+            "failed": failed,
+            "actions": [
+                {"action": a, "count": d["n"], "fail": d["fail"],
+                 "avg": round(d["t"] / d["tn"], 3) if d["tn"] else None}
+                for a, d in ordered],
+        })
+        return 0
+    print("%-28s %6s %6s %10s" % ("action", "count", "fail", "avg(s)"))
+    for a, d in ordered:
+        avg = ("%.2f" % (d["t"] / d["tn"])) if d["tn"] else "-"
+        print("%-28s %6d %6d %10s" % (a, d["n"], d["fail"], avg))
     print("\n合计 %d 步，失败 %d 步" % (total, failed))
     return 0
 
@@ -610,7 +905,13 @@ def session_tail(bridge, n=10):
     """看最近 n 步，带返回值摘要 —— 比 session show 更适合事后排查"""
     rows = bridge.session()[-n:]
     if not rows:
-        info("session 里还没有记录")
+        if JSON_OUT:
+            emit_json({"ok": True, "steps": []})
+        else:
+            info("session 里还没有记录")
+        return 0
+    if JSON_OUT:
+        emit_json({"ok": True, "steps": rows})
         return 0
     for e in rows:
         head = "%s %-9s %-22s" % (e.get("ts", ""), "ok" if e.get("ok") else "FAIL", e.get("action"))
@@ -664,18 +965,27 @@ def cmd_recipe_list(_bridge, args):
     out_dir = args.recipe_dir or DEFAULT_RECIPE_DIR
     os.makedirs(out_dir, exist_ok=True)
     names = sorted(n for n in os.listdir(out_dir) if n.endswith(".json"))
-    if not names:
-        print("(还没有 recipe，跑通一遍后执行 `recipe save <名字>` 生成)")
-        return 0
+    rows = []
     for n in names:
         path = os.path.join(out_dir, n)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            print("%-28s %2d 步  %s" % (n, len(data.get("steps", [])),
-                                        data.get("description", "")))
-        except (ValueError, OSError):
-            print("%-28s (读取失败)" % n)
+            rows.append({"name": n, "steps": len(data.get("steps", [])),
+                         "description": data.get("description", ""), "ok": True})
+        except (ValueError, OSError) as e:
+            rows.append({"name": n, "ok": False, "error": str(e)})
+    if JSON_OUT:
+        emit_json({"ok": True, "recipes": rows})
+        return 0
+    if not rows:
+        print("(还没有 recipe，跑通一遍后执行 `recipe save <名字>` 生成)")
+        return 0
+    for r in rows:
+        if r["ok"]:
+            print("%-28s %2d 步  %s" % (r["name"], r["steps"], r["description"]))
+        else:
+            print("%-28s (读取失败)" % r["name"])
     return 0
 
 
@@ -782,10 +1092,19 @@ def compile_check(bridge, timeout=60.0, log_path=None, trigger=True):
         time.sleep(0.4)
 
     # 判断「是否真的发生了编译」：isCompiling 翻转是权威信号；
-    # 日志作为兜底，但 Unity 的日志有缓冲，不能只靠它（会假阴性）
-    time.sleep(2.0)                       # 给日志一点落盘时间
-    new_text = _new_log_text(log, mark)
-    compiled = saw_compiling or ("script compilation" in new_text) or ("error CS" in new_text)
+    # 日志作为兜底，但 Unity 的日志有缓冲，不能只靠它（会假阴性）。
+    #
+    # ⚠ 以前这里固定 sleep 2.0s「给日志落盘时间」，但：
+    #   - 看到 isCompiling 翻转时，compiled 已经是确定的，日志只在失败时用来抓 error CS；
+    #   - 成功路径等这 2 秒纯浪费，占了一次 compile 校验的大半时间。
+    #   改成按需等：成功不等，失败才等（且有上限）。
+    if saw_compiling:
+        compiled = True
+        if state.get("compilationFailed"):
+            wait_for_log_signal(log, mark)
+    else:
+        new_text = wait_for_log_signal(log, mark)
+        compiled = ("script compilation" in new_text) or ("error CS" in new_text)
 
     failed = bool(state.get("compilationFailed"))
     return {
@@ -830,6 +1149,8 @@ def build_parser():
                    help="单条指令等待秒数，默认 60")
     p.add_argument("--recipe-dir", default=None,
                    help="recipe 存放目录（默认 tools/recipes，不同项目可用不同目录）")
+    p.add_argument("--json", action="store_true",
+                   help="机器可读输出：stdout 只输出一个 JSON 对象（诊断信息仍走 stderr）")
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -899,135 +1220,36 @@ def build_parser():
 
 
 def main():
+    global JSON_OUT
     parser = build_parser()
     args = parser.parse_args()
+    JSON_OUT = bool(getattr(args, "json", False))
 
-    if args.cmd == "explain":
-        if args.code:
-            code = args.code.upper()
-            title, hint = code_help(code)
-            if not title:
-                die("没有这个错误码: %s（用 `explain` 不带参数列出全部）" % code,
-                    error_code="ZB-CLI-007")
-            print("%s  %s" % (code, title))
-            if hint:
-                print("  " + hint)
-        else:
-            for c in sorted(ERROR_CODES):
-                title, _hint = ERROR_CODES[c]
-                print("%-14s %s" % (c, title))
-        return 0
+    handler, needs_project = COMMANDS.get(args.cmd, (None, False))
 
-    if args.cmd == "log":
-        path = args.path or editor_log_path()
-        if not os.path.isfile(path):
-            die("找不到日志: %s（用 --path 指定）" % path, error_code="ZB-CLI-006")
-        pat = re.compile(args.grep) if args.grep else None
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        if pat:
-            lines = [l for l in lines if pat.search(l)]
-        sys.stdout.write("".join(lines[-args.tail:]))
-        return 0
+    # recipe 有自己的二级分发
+    if args.cmd == "recipe":
+        bridge = _make_bridge(args, parser)
+        return args.func(bridge, args)
 
-    if args.cmd == "unblock":
-        if not sys.platform.startswith("win"):
-            die("unblock 目前只实现了 Windows（macOS/Linux 需要人工点掉对话框）")
-        out = dismiss_unity_modal()
-        if out is None:
-            die("找不到 dismiss_unity_modal.ps1，或 PowerShell 执行失败",
-                error_code="ZB-CLI-007")
-        print(out)
-        return 0 if '"ok":true' in out or '"ok": true' in out else 1
+    if handler is None:
+        parser.print_help()
+        return 1
 
+    if not needs_project:
+        # explain / log / unblock：纯本地能力，不该因为没给 --project 就失败
+        return handler(None, args)
+
+    bridge = _make_bridge(args, parser)
+    return handler(bridge, args)
+
+
+def _make_bridge(args, parser):
     if not args.project:
         die("加 --project <Unity 工程根目录>，或设环境变量 %s" % ENV_PROJECT,
             error_code="ZB-CLI-001")
+    return Bridge(args.project, args.prefix, args.timeout)
 
-    bridge = Bridge(args.project, args.prefix, args.timeout)
-
-    if args.cmd == "actions":
-        result = bridge.send("list_actions")
-        if result is None:
-            die("Unity 没响应。确认编辑器已打开、AgentBridge.cs 已编译（看 Console 里有没有 "
-                "[AgentBridge] 已就绪）", error_code="ZB-BRIDGE-001")
-        if not result.get("ok"):
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            return 1
-        for n in result["state"]["actions"]:
-            print(n)
-        return 0
-
-    if args.cmd == "send":
-        if not args.no_guard:
-            blocked = guard_before_drive(bridge)
-            if blocked:
-                die(blocked, error_code="ZB-BRIDGE-002")
-        result = bridge.send(args.action, parse_arg_pairs(args.arg), timeout=args.timeout)
-        if result is None:
-            die("超时，没收到结果", error_code="ZB-BRIDGE-001")
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if not result.get("ok"):
-            code = result.get("code")
-            title, hint = code_help(code) if code else (None, None)
-            if title:
-                info("失败原因 [%s] %s" % (code, title))
-            if hint:
-                info("  → " + hint)
-        return 0 if result.get("ok") else 1
-
-    if args.cmd == "compile":
-        r = compile_check(bridge, timeout=args.timeout, log_path=args.log)
-        if not r["ok"]:
-            print("编译失败 ✗ —— Unity 仍在用上一次成功的程序集运行，"
-                  "此时驱动得到的是旧代码的结果。", file=sys.stderr)
-            for e in r["errors"]:
-                print("  " + e, file=sys.stderr)
-            if not r["errors"]:
-                print("  （没能从日志提取到 error CS 行，请直接看 Editor.log）", file=sys.stderr)
-            return 1
-
-        if r.get("playing"):
-            # 编译本身是过的，但新程序集不会换到正在运行的代码上 —— 退出码单独区分
-            print("编译通过，但**当前在播放模式** ⚠️", file=sys.stderr)
-            print("  新编译出来的程序集不会换到正在运行的代码上，"
-                  "此时驱动到的仍是旧代码。先 `send stop` 再驱动。", file=sys.stderr)
-            return 3
-
-        notes = []
-        if r["compiled"] is False:
-            notes.append("未检测到新的编译发生（源码没变？或刷新没生效）")
-        if r["triggered"] is False:
-            notes.append("⚠️ 桥不支持 refresh，无法主动触发编译，请先聚焦编辑器")
-        print("编译通过 ✓" + ("　·　" + "；".join(notes) if notes else ""))
-        return 0
-
-    if args.cmd == "wait":
-        ok, last = bridge.wait_for(args.action, parse_arg_pairs(args.arg),
-                                   args.path, args.equals, args.timeout)
-        print(json.dumps(last, ensure_ascii=False, indent=2) if last else "(无结果)")
-        return 0 if ok else 1
-
-    if args.cmd == "session":
-        if args.session_cmd == "clear":
-            bridge.clear_session()
-            print("已清空 session 记录")
-        elif args.session_cmd == "stats":
-            return session_stats(bridge)
-        elif args.session_cmd == "tail":
-            return session_tail(bridge, args.n)
-        else:
-            for i, e in enumerate(bridge.session(), 1):
-                print("%2d. %-9s %-24s %s" % (
-                    i, "ok" if e.get("ok") else "FAIL",
-                    e["action"], json.dumps(e.get("args") or {}, ensure_ascii=False)))
-        return 0
-
-    if args.cmd == "recipe":
-        return args.func(bridge, args)
-
-    parser.print_help()
-    return 1
 
 
 if __name__ == "__main__":

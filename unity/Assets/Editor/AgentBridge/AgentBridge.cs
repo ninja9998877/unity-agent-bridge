@@ -164,6 +164,13 @@ namespace AgentBridge
                 string action = cmd["action"]?.ToString();
                 var args = cmd["args"] as JObject ?? new JObject();
 
+                // 请求序号：bridge.py 用它精确匹配「这是哪一次请求的返回」。
+                // 同名 action 连发时，光比 action 名分不清。旧版脚本不发 seq，
+                // 这里就原样不填，保持向后兼容。
+                var seq = cmd["seq"];
+                if (seq != null && seq.Type != JTokenType.Null)
+                    resp["seq"] = seq.DeepClone();
+
                 if (string.IsNullOrEmpty(action))
                 {
                     resp["ok"] = false;
@@ -253,9 +260,20 @@ namespace AgentBridge
 
         private static void WriteResult(JObject resp)
         {
+            // 原子写：WriteAllText 是「先截断再写」，轮询方可能正好读到空文件或半截 JSON。
+            // 先写 .tmp 再换名，读方看到的永远是「旧内容」或「完整新内容」。
+            string tmp = ResultPath + ".tmp";
             try
             {
-                File.WriteAllText(ResultPath, resp.ToString(Newtonsoft.Json.Formatting.Indented));
+                File.WriteAllText(tmp, resp.ToString(Newtonsoft.Json.Formatting.Indented));
+                if (File.Exists(ResultPath))
+                {
+                    File.Replace(tmp, ResultPath, null);
+                }
+                else
+                {
+                    File.Move(tmp, ResultPath);
+                }
             }
             catch (Exception e)
             {

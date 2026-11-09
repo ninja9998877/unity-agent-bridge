@@ -404,6 +404,9 @@ python tools/bridge.py session stats                   # 按 action 汇总：次
 
 > ⚠️ **recipe 是私有资产**，里面有账号、服务器 ID、业务流程 —— **不要提交到公开仓库**。
 
+> `session` 记录超过 8 MB 会自动轮转成 `_session.jsonl.1`（只留一代），不会无限涨。
+> 每条指令带递增的 `seq`，同名 action 连发也能分清是哪一次的返回。
+
 ## 失败了怎么办：看错误码
 
 每条失败都带码，可以按码分流，不用读整段文字：

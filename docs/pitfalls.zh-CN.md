@@ -201,6 +201,17 @@ os.replace(path + ".tmp", path)     # 同一文件系统上的改名是原子的
 
 Unity 侧解析失败也不该崩溃，返回 `{"ok": false, "error": "..."}` 即可。
 
+**反方向同样成立**：Unity 写 `result` 文件时也必须原子写。`File.WriteAllText`
+是「先截断再写」，轮询方可能读到空文件或半截 JSON，表现为偶发的
+`json.load` 失败 / 结果丢一次。Unity 侧写法：
+
+```csharp
+string tmp = ResultPath + ".tmp";
+File.WriteAllText(tmp, json);
+if (File.Exists(ResultPath)) File.Replace(tmp, ResultPath, null);
+else File.Move(tmp, ResultPath);
+```
+
 ---
 
 ## 6. 同一条指令被执行两次
@@ -269,12 +280,20 @@ python tools/bridge.py log --tail 50 --grep "你的 TAG"
 
 ## 11. 同一个 prefix 被两个进程共用 → 读到别人的结果
 
-桥是「写指令文件 → 轮询结果文件」，**没有请求 ID**。两个 agent 同时用同一个
-`--prefix`，或上一次超时后 Unity 才把结果写回来，就可能把别人的结果当成自己的。
+桥是「写指令文件 → 轮询结果文件」。两个 agent 同时用同一个 `--prefix`，或上一次
+超时后 Unity 才把结果写回来，就可能把别人的结果当成自己的。
 实测现象：请求 `ping`，回来的却是另一个 action 的数据。
 
-**对策（bridge.py 已内置第一层）**：收到结果时校验 `action` 是否是自己发的，
-不匹配就当陈旧结果丢弃、继续等。
+**对策（bridge.py 已内置）**：
+
+1. 每条指令带一个**递增的请求序号 `seq`**，Unity 侧把它原样回显。
+   `bridge.py` 用 `seq` 做精确匹配 —— 连发两次同名 `open_panel` 也能分清。
+2. 旧版 Unity 桥不回显 `seq` 时，退回按 `action` 名匹配；**没有 `action`
+   字段的结果一律丢弃**（不能盲信）。
+3. 每次 `send` 前先删 `result` 文件。
+
+`seq` 是纯递增计数器，不依赖时钟 —— Windows 上时间戳精度低、系统时间还可能被
+回拨，用它做请求 ID 不可靠。
 
 **仍建议**：多个 agent / 多个会话并行时，各自用不同 `--prefix`（例如
 `--prefix a1`、`--prefix b2`），从源头上隔开。

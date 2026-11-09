@@ -427,6 +427,10 @@ Syntax in [`docs/recipes.md`](docs/recipes.md).
 > ⚠️ **Recipes are private assets.** They contain accounts, server IDs, and business flows —
 > **never commit them to a public repo.**
 
+> The `session` log rotates to `_session.jsonl.1` once it passes 8 MB (one generation kept),
+> so it never grows without bound. Every command carries a monotonic `seq`, so two
+> consecutive calls to the same action can still be told apart.
+
 ## When it fails: read the error code
 
 Every failure carries a code, so you can branch on it instead of parsing prose:

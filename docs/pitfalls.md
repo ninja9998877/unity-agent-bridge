@@ -210,6 +210,17 @@ os.replace(path + ".tmp", path)     # rename within the same filesystem is atomi
 
 The Unity side should also never crash on a parse failure — return `{"ok": false, "error": "..."}`.
 
+**It goes both ways**: Unity must write the `result` file atomically too. `File.WriteAllText`
+truncates first, so a poller can read an empty or half-written file — you get the occasional
+`json.load` failure or a lost result. On the Unity side:
+
+```csharp
+string tmp = ResultPath + ".tmp";
+File.WriteAllText(tmp, json);
+if (File.Exists(ResultPath)) File.Replace(tmp, ResultPath, null);
+else File.Move(tmp, ResultPath);
+```
+
 ---
 
 ## 6. The same command running twice
@@ -346,3 +357,25 @@ the next step, not this one.
 
 `annotate()` turns `ok=true + state.ok=false` into `ok=false` with a code.
 Same principle as “a successful call is not a successful execution”.
+
+---
+
+## 12. Two senders on one prefix → reading someone else's result
+
+The bridge is "write a command file → poll for a result file". Two agents sharing a
+`--prefix`, or a late result from a request that already timed out, can be mistaken
+for your own. Observed symptom: you send `ping` and get back a different action's data.
+
+**Countermeasure (built into `bridge.py`)**:
+
+1. Every command carries a **monotonic `seq`**; Unity echoes it back. `bridge.py`
+   matches on `seq` — two consecutive `open_panel` calls no longer cross-wire.
+2. If an older Unity bridge doesn't echo `seq`, matching falls back to the `action`
+   name, and results **with no `action` field are discarded** rather than trusted.
+3. The result file is deleted before every `send`.
+
+`seq` is a plain counter, not a clock — Windows timestamp resolution is poor and
+system time can jump backwards, so clocks make bad request IDs.
+
+**Still recommended**: give each agent / session its own `--prefix`
+(`--prefix a1`, `--prefix b2`) to keep them apart at the source.
