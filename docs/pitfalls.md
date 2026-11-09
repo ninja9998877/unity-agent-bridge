@@ -276,3 +276,73 @@ that it's easy to misread as "Unity is broken".
 
 **Countermeasure**: make sure the editor is closed before running batchmode
 (compile checks / EditMode tests).
+
+---
+
+## 11. Free-text errors can't be branched on — every failure needs a human to read it
+
+### Symptom
+
+A failure looks like this:
+
+```json
+{ "ok": false, "error": "Type not found: LoginManager" }
+```
+
+A human understands it. **Code does not.** An agent can only paste the whole
+sentence into a model and guess, or regex-match it — which breaks the moment
+the wording changes.
+
+Worse, the same blob hides who is responsible:
+
+| Failure | What you should do |
+|---|---|
+| Unity isn't running | Start Unity — retrying is pointless |
+| Compilation failed | Fix the compile errors — driving the bridge only yields the *old* assembly |
+| Panel not open | Call `open_panel` first — an ordering problem |
+| Type name is wrong | Fix the action argument — a code problem |
+
+Four different remedies, indistinguishable from the text.
+
+### Countermeasure: three-segment error codes
+
+| Segment | Meaning | Produced by |
+|---|---|---|
+| `ZB-CLI-0xx` | Command line: bad arguments/environment, nothing was sent | Python side |
+| `ZB-BRIDGE-0xx` | Bridge link: sent but no reply (timeout / compile guard / modal dialog) | Python side |
+| `ZB-ACT-0xx` | Action: Unity received and ran it, but it failed | **Classified** from C# text |
+
+```bash
+python tools/bridge.py explain              # list every code
+python tools/bridge.py explain ZB-ACT-001   # title + what to do
+```
+
+A failed `send` now prints the code and the remedy:
+
+```
+[bridge] [ZB-BRIDGE-001] Unity is not responding (timeout): timed out, no result
+  -> 1) check for a native dialog (bridge.py unblock) 2) send frame ...
+```
+
+The JSON result carries it too:
+
+```json
+{ "ok": false, "code": "ZB-ACT-001", "error": "Type not found: XXX" }
+```
+
+### ⚠️ The ACT segment is *classified*, not authoritative
+
+The C# side still returns free text; `classify_error()` maps it by keyword. So:
+
+- **Only the category is guaranteed**; trust `message` for specifics.
+- **Unrecognised text returns `None`** rather than a guessed code — a wrong code
+  is worse than no code, because callers branch on it.
+- When new wording shows up in logs, add a line to `_ACT_RULES`. **No recompile.**
+
+Making the ACT segment authoritative requires returning codes from C# — that's
+the next step, not this one.
+
+### Also: merging `state.ok` into `ok`
+
+`annotate()` turns `ok=true + state.ok=false` into `ok=false` with a code.
+Same principle as “a successful call is not a successful execution”.

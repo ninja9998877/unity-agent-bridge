@@ -24,6 +24,25 @@ Everything you need is below. **Read it before doing anything.**
 
 ---
 
+## 0.5. On failure, read the error code first
+
+Every failure carries a `ZB-*` code. Branch on it before reading any log:
+
+| Segment | Meaning | What you do |
+|---|---|---|
+| `ZB-CLI-0xx` | Bad command/env — nothing was sent | Fix the arguments, don't dig into the project |
+| `ZB-BRIDGE-0xx` | Sent but no reply | **Don't just retry**: `001` check dialogs/focus, `002` fix compilation, `003` `send stop` first |
+| `ZB-ACT-0xx` | Unity ran it and it failed | Usually chain order: `003`/`004` run the prep steps; `001`/`002` mean the action args are wrong |
+
+```bash
+python tools/bridge.py explain <CODE>     # title + remedy
+```
+
+**Never guess a code.** `ZB-ACT-*` is classified from free text; `None` means
+"unrecognised" — fall back to `message`.
+
+---
+
 ## 1. First, check that the bridge is alive
 
 ```bash

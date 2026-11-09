@@ -404,6 +404,30 @@ python tools/bridge.py session stats                   # 按 action 汇总：次
 
 > ⚠️ **recipe 是私有资产**，里面有账号、服务器 ID、业务流程 —— **不要提交到公开仓库**。
 
+## 失败了怎么办：看错误码
+
+每条失败都带码，可以按码分流，不用读整段文字：
+
+```bash
+python tools/bridge.py explain              # 列出全部错误码
+python tools/bridge.py explain ZB-ACT-001   # 查一个码的含义和处理办法
+```
+
+| 段 | 含义 | 该做什么 |
+|---|---|---|
+| `ZB-CLI-0xx` | 命令行/环境不对，请求根本没发出去 | 改命令、补 `--project` |
+| `ZB-BRIDGE-0xx` | 发出去了但没通（超时/编译拦截/模态框） | 修环境，别重试 |
+| `ZB-ACT-0xx` | Unity 执行了但失败（找不到类型/实例为空/面板没开…） | 修链路顺序或 action 参数 |
+
+结果 JSON 里同样带 `code`：
+
+```json
+{ "ok": false, "code": "ZB-ACT-001", "error": "找不到类型: XXX" }
+```
+
+> ⚠️ `ZB-ACT-*` 是从 C# 侧的自由文本**归类**出来的，只保证类别对；
+> 认不出来的不给码（宁缺勿错）。详见 `docs/pitfalls.zh-CN.md` 第 13 条。
+
 ## 别做这些
 
 - ❌ 为了让"一步到位"而绕过真实业务路径硬塞状态 —— 复现出来的不是真 bug

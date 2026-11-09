@@ -427,6 +427,31 @@ Syntax in [`docs/recipes.md`](docs/recipes.md).
 > ⚠️ **Recipes are private assets.** They contain accounts, server IDs, and business flows —
 > **never commit them to a public repo.**
 
+## When it fails: read the error code
+
+Every failure carries a code, so you can branch on it instead of parsing prose:
+
+```bash
+python tools/bridge.py explain              # list every code
+python tools/bridge.py explain ZB-ACT-001   # title + what to do
+```
+
+| Segment | Meaning | What to do |
+|---|---|---|
+| `ZB-CLI-0xx` | Bad arguments/environment — nothing was sent | Fix the command, pass `--project` |
+| `ZB-BRIDGE-0xx` | Sent but no reply (timeout / compile guard / modal) | Fix the environment; retrying won't help |
+| `ZB-ACT-0xx` | Unity ran it and it failed (type missing, null instance, panel not open…) | Fix the chain order or the action args |
+
+The result JSON carries it too:
+
+```json
+{ "ok": false, "code": "ZB-ACT-001", "error": "Type not found: XXX" }
+```
+
+> `ZB-ACT-*` is **classified** from free text on the C# side — only the category
+> is guaranteed, and unrecognised text gets no code at all (better none than wrong).
+> See `docs/pitfalls.md` §11.
+
 ## Don't do these
 
 - ❌ Bypass the real code path and force state in, just to "jump straight there" — the bug you

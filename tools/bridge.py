@@ -75,8 +75,12 @@ def dismiss_unity_modal():
 # 基础工具
 # ─────────────────────────────────────────────────────────────────────
 
-def die(msg, code=1):
-    print("[bridge] 错误: %s" % msg, file=sys.stderr)
+def die(msg, code=1, error_code=None):
+    """失败退出。给了 error_code 就打码——调用方和 Agent 都能按码分流。"""
+    if error_code:
+        print("[bridge] " + str(BridgeError(error_code, msg)), file=sys.stderr)
+    else:
+        print("[bridge] 错误: %s" % msg, file=sys.stderr)
     sys.exit(code)
 
 
@@ -107,7 +111,7 @@ def parse_arg_pairs(pairs):
     out = {}
     for item in pairs or []:
         if "=" not in item:
-            die("--arg 需要 k=v 形式，收到: %s" % item)
+            die("--arg 需要 k=v 形式，收到: %s" % item, error_code="ZB-CLI-003")
         k, v = item.split("=", 1)
         out[k.strip()] = coerce(v)
     return out
@@ -143,6 +147,149 @@ def dig(obj, path):
 # 桥接客户端
 # ─────────────────────────────────────────────────────────────────────
 
+# ---------------------------------------------------------------------
+# 错误码
+#
+# 为什么需要：以前失败只回一段自由文本（"找不到类型: XXX" / "超时"），
+# 人和 Agent 都只能读全文来判断该重试、该修代码，还是该去开 Unity。
+# 加码之后可以程序化分流：ZB-CLI-* 改命令；ZB-BRIDGE-* 修环境；
+# ZB-ACT-* 才是真正的业务/代码问题。
+#
+# 分段：
+#   ZB-CLI-0xx     命令行层：参数/环境不对，请求根本没发出去
+#   ZB-BRIDGE-0xx  桥链路层：发出去了但没通（超时、编译拦截、模态框）
+#   ZB-ACT-0xx     action 层：Unity 收到了并执行了，但执行失败
+#
+# 注意：ACT 段的码是从 C# 侧的自由文本「归类」出来的（见 classify_error），
+#       不是 Unity 直接返回的。所以只保证类别对，具体文案仍以 message 为准。
+# ---------------------------------------------------------------------
+
+ERROR_CODES = {
+    # ---- 命令行 ----
+    "ZB-CLI-001": ("没指定工程目录", "加 --project <Unity 工程根目录>，或设环境变量 AGENTBRIDGE_PROJECT"),
+    "ZB-CLI-002": ("工程目录下没有 Temp/", "--project 必须指向 Unity 工程根目录（含 Assets/ 和 ProjectSettings/ 的那一层）"),
+    "ZB-CLI-003": ("参数格式不对", "参数必须是 k=v 形式"),
+    "ZB-CLI-004": ("找不到 recipe", "用 `recipe list` 看已有 recipe；路径要写对"),
+    "ZB-CLI-005": ("recipe 步骤编号越界", "检查 --from / --only 的值是否超过步骤总数"),
+    "ZB-CLI-006": ("找不到日志文件", "用 --path 指定 Editor.log 的实际位置"),
+    "ZB-CLI-007": ("子命令失败", "见 message；unblock 只支持 Windows"),
+
+    # ---- 桥链路 ----
+    "ZB-BRIDGE-001": ("Unity 没响应（超时）", "1) 看屏幕有没有原生弹窗（bridge.py unblock） 2) send frame 量循环 3) send compile_status 看编译 4) 编辑器是否失焦"),
+    "ZB-BRIDGE-002": ("编译失败，拒绝驱动", "先修编译错误再驱动 —— 否则 Unity 仍在用上一次成功的程序集，拿到的是旧代码的结果"),
+    "ZB-BRIDGE-003": ("Unity 处于播放模式", "新程序集不会换到正在运行的代码上：先 `send stop`，再驱动"),
+    "ZB-BRIDGE-004": ("桥不支持该能力", "Unity 侧 AgentBridge.cs / TestActions.cs 版本偏旧，需要更新后重新编译"),
+    "ZB-BRIDGE-005": ("检测到 Unity 模态对话框", "已自动尝试关闭；没关掉就手动点掉，再重发"),
+
+    # ---- action 执行 ----
+    "ZB-ACT-001": ("找不到类型", "类名写错，或该类型所在的程序集没被加载；用 list_actions / probe 核对"),
+    "ZB-ACT-002": ("找不到成员", "字段/属性/方法名写错，或访问级别不是 public/protected"),
+    "ZB-ACT-003": ("实例为空", "前置状态没到（如还没登录、还没进战斗、面板没打开）。先跑对应的准备步骤"),
+    "ZB-ACT-004": ("前置界面没打开", "先用 open_panel 打开目标面板，再用这个 action"),
+    "ZB-ACT-005": ("不在播放模式", "先 `send play` 进入播放模式"),
+    "ZB-ACT-006": ("找不到资源/配置", "检查 ID 是否正确、配置表是否已加载"),
+    "ZB-ACT-007": ("状态不允许该操作", "先看当前状态读取类 action（如 *_state）再决定下一步"),
+    "ZB-ACT-999": ("未归类的执行失败", "看 message 原文"),
+}
+
+
+def code_help(code):
+    """返回 (标题, 处理建议)；未知码返回 (None, None)"""
+    return ERROR_CODES.get(code, (None, None))
+
+
+# 归类规则：按顺序匹配，第一个命中即用。
+# ⚠️ 顺序很重要：**专用规则必须排在通用规则前面**。
+#    比如 TestActions 里大量用 Err("找不到 " + 名字)，既有「找不到类型」也有
+#    「找不到 towerId」；通用规则若排在前面，会把后者也吃成 ACT-001。
+# 文案取自 TestActions.cs 里的 Err(...)，实际日志出现新说法时往这里补。
+_ACT_RULES = [
+    ("ZB-ACT-006", ("找不到 towerId", "找不到塔位", "配置不存在", "找不到配置")),
+    ("ZB-ACT-002", ("找不到 CreateHero", "找不到成员", "没有这个成员", "找不到方法")),
+    ("ZB-ACT-004", ("面板没打开", "面板未打开", "还没有打开", "界面未打开")),
+    ("ZB-ACT-005", ("未进入播放模式", "不在播放模式", "not in play mode")),
+    ("ZB-ACT-003", ("为 null", "为空", "实例不存在", "instance 为 null", "不存在（")),
+    ("ZB-ACT-001", ("找不到类型", "类型未找到", "找不到 LoginState 枚举", "找不到 ")),
+    ("ZB-ACT-007", ("状态不允许", "条件不满足", "拒绝", "还没到")),
+]
+
+
+def classify_error(message):
+    """把 C# 侧的自由文本归类成错误码。
+
+    认不出来就返回 None —— 宁可留空，也不要瞎猜一个码，
+    那样会让「按码分流」的调用方走错分支。
+    """
+    if not message:
+        return None
+    text = str(message)
+    m = re.search(r"\bZB-(CLI|BRIDGE|ACT)-\d{3}\b", text)
+    if m:
+        return m.group(0)
+    low = text.lower()
+    for code, needles in _ACT_RULES:
+        for n in needles:
+            if n.lower() in low:
+                return code
+    return None
+
+
+class BridgeError(Exception):
+    """带错误码的失败。调用方可以按 code 分流，不用解析文本。"""
+
+    def __init__(self, code, message, detail=None):
+        self.code = code
+        self.message = message
+        self.detail = detail
+        super(BridgeError, self).__init__(message)
+
+    def to_dict(self):
+        title, hint = code_help(self.code)
+        out = {"code": self.code, "message": self.message}
+        if title:
+            out["title"] = title
+        if hint:
+            out["hint"] = hint
+        if self.detail:
+            out["detail"] = self.detail
+        return out
+
+    def __str__(self):
+        title, hint = code_help(self.code)
+        s = "[%s] %s" % (self.code, title or "失败")
+        # message 和 title 经常高度重合（如两者都是「没指定工程目录」），
+        # 重复打印一遍只会让输出更难读，所以重合时省掉 message。
+        msg = str(self.message) if self.message else ""
+        if msg and msg != (title or ""):
+            s += "：" + msg
+        if hint:
+            s += "\n  -> " + hint
+        return s
+
+
+def annotate(result):
+    """给 action 结果补错误码（成功则原样返回）。
+
+    成功判定要看 state.ok：桥本身跑通了但 action 内部失败时，
+    外层 ok=true、state.ok=false —— 只看外层会把失败当成成功。
+    """
+    if not isinstance(result, dict):
+        return result
+    if result.get("ok"):
+        state = result.get("state")
+        if isinstance(state, dict) and state.get("ok") is False:
+            err = state.get("error")
+            code = classify_error(err)
+            if code:
+                result["code"] = code
+            result["ok"] = False
+        return result
+    code = result.get("code") or classify_error(result.get("error"))
+    if code:
+        result["code"] = code
+    return result
+
+
 SESSION_TEXT_LIMIT = 500          # session 里单个文本字段保留的最大字符数
 
 
@@ -173,7 +320,8 @@ class Bridge(object):
         self.session_path = os.path.join(self.temp, prefix + "_session.jsonl")
 
         if not os.path.isdir(self.temp):
-            die("找不到 %s —— --project 指向的是 Unity 工程根目录吗？" % self.temp)
+            die("找不到 %s —— --project 指向的是 Unity 工程根目录吗？" % self.temp,
+                error_code="ZB-CLI-002")
 
     # ---------- 核心收发 ----------
 
@@ -225,11 +373,10 @@ class Bridge(object):
                 if hint and '"dismissed":0' not in hint and '"dismissed": 0' not in hint:
                     info("⚠️ 检测到 Unity 模态对话框（会让编辑器整个卡住），已尝试关闭：%s" % hint)
                     info("   → 已关闭，重发一次通常就能通。")
-                else:
-                    info("   排查顺序：① 看屏幕有没有弹窗（bridge.py unblock）"
-                         "② frame 量循环 ③ compile_status 看编译 ④ 编辑器是否失焦")
+                # 具体排查顺序由 ZB-BRIDGE-001 的 hint 统一给出，这里不重复打印
             return None
 
+        result = annotate(result)
         if record:
             self._record(action, args or {}, result, elapsed=time.time() - _t0)
         return result
@@ -262,6 +409,8 @@ class Bridge(object):
             err = state.get("error")
         if err:
             entry["error"] = str(err)[:SESSION_TEXT_LIMIT]
+        if result.get("code"):
+            entry["code"] = result["code"]
         try:
             with open(self.session_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -738,6 +887,9 @@ def build_parser():
     st = ses.add_parser("tail", help="只看最近 N 步（含返回值摘要）")
     st.add_argument("-n", type=int, default=10)
 
+    ex = sub.add_parser("explain", help="查错误码的含义和处理办法（不带参数则列出全部）")
+    ex.add_argument("code", nargs="?", default=None, help="如 ZB-ACT-001")
+
     lg = sub.add_parser("log", help="看 Unity 编辑器日志尾部")
     lg.add_argument("--tail", type=int, default=60)
     lg.add_argument("--grep", default=None, help="只显示匹配的行（正则）")
@@ -750,10 +902,26 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.cmd == "explain":
+        if args.code:
+            code = args.code.upper()
+            title, hint = code_help(code)
+            if not title:
+                die("没有这个错误码: %s（用 `explain` 不带参数列出全部）" % code,
+                    error_code="ZB-CLI-007")
+            print("%s  %s" % (code, title))
+            if hint:
+                print("  " + hint)
+        else:
+            for c in sorted(ERROR_CODES):
+                title, _hint = ERROR_CODES[c]
+                print("%-14s %s" % (c, title))
+        return 0
+
     if args.cmd == "log":
         path = args.path or editor_log_path()
         if not os.path.isfile(path):
-            die("找不到日志: %s（用 --path 指定）" % path)
+            die("找不到日志: %s（用 --path 指定）" % path, error_code="ZB-CLI-006")
         pat = re.compile(args.grep) if args.grep else None
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
@@ -767,13 +935,14 @@ def main():
             die("unblock 目前只实现了 Windows（macOS/Linux 需要人工点掉对话框）")
         out = dismiss_unity_modal()
         if out is None:
-            die("找不到 dismiss_unity_modal.ps1，或 PowerShell 执行失败")
+            die("找不到 dismiss_unity_modal.ps1，或 PowerShell 执行失败",
+                error_code="ZB-CLI-007")
         print(out)
         return 0 if '"ok":true' in out or '"ok": true' in out else 1
 
     if not args.project:
-        die("没指定工程目录：加 --project <Unity 工程根目录>，"
-            "或设环境变量 %s" % ENV_PROJECT)
+        die("加 --project <Unity 工程根目录>，或设环境变量 %s" % ENV_PROJECT,
+            error_code="ZB-CLI-001")
 
     bridge = Bridge(args.project, args.prefix, args.timeout)
 
@@ -781,7 +950,7 @@ def main():
         result = bridge.send("list_actions")
         if result is None:
             die("Unity 没响应。确认编辑器已打开、AgentBridge.cs 已编译（看 Console 里有没有 "
-                "[AgentBridge] 已就绪）")
+                "[AgentBridge] 已就绪）", error_code="ZB-BRIDGE-001")
         if not result.get("ok"):
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 1
@@ -793,11 +962,18 @@ def main():
         if not args.no_guard:
             blocked = guard_before_drive(bridge)
             if blocked:
-                die(blocked)
+                die(blocked, error_code="ZB-BRIDGE-002")
         result = bridge.send(args.action, parse_arg_pairs(args.arg), timeout=args.timeout)
         if result is None:
-            die("超时，没收到结果")
+            die("超时，没收到结果", error_code="ZB-BRIDGE-001")
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if not result.get("ok"):
+            code = result.get("code")
+            title, hint = code_help(code) if code else (None, None)
+            if title:
+                info("失败原因 [%s] %s" % (code, title))
+            if hint:
+                info("  → " + hint)
         return 0 if result.get("ok") else 1
 
     if args.cmd == "compile":
